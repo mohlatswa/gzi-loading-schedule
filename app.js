@@ -160,6 +160,11 @@ function renderLogin(mode = 'login', error = '') {
         <h2>${mode === 'login' ? 'Sign in' : 'Create account'}</h2>
         <p class="sub">${mode === 'login' ? 'Warehouse loading schedule system' : 'Register with your GZI work email'}</p>
         ${error ? `<div class="login-error">${esc(error)}</div>` : ''}
+        <button type="button" class="btn btn-outline btn-block ms-signin-btn" id="ms-signin-btn">
+          <svg width="16" height="16" viewBox="0 0 21 21" style="flex:none;"><rect x="1" y="1" width="9" height="9" fill="#f25022"/><rect x="11" y="1" width="9" height="9" fill="#7fba00"/><rect x="1" y="11" width="9" height="9" fill="#00a4ef"/><rect x="11" y="11" width="9" height="9" fill="#ffb900"/></svg>
+          Sign in with Microsoft
+        </button>
+        <div class="or-divider"><span>or</span></div>
         <form id="auth-form">
           <div class="field"><label>Email</label><input type="email" id="auth-email" required autocomplete="email" /></div>
           <div class="field"><label>Password</label><input type="password" id="auth-password" required autocomplete="${mode === 'login' ? 'current-password' : 'new-password'}" minlength="6" /></div>
@@ -172,6 +177,17 @@ function renderLogin(mode = 'login', error = '') {
         </div>
       </div>
     </div>`;
+
+  $('#ms-signin-btn').addEventListener('click', async () => {
+    const btn = $('#ms-signin-btn');
+    btn.disabled = true;
+    const { error } = await sb.auth.signInWithOAuth({
+      provider: 'azure',
+      options: { scopes: 'email openid profile', redirectTo: window.location.origin + window.location.pathname }
+    });
+    if (error) { btn.disabled = false; renderLogin(mode, error.message); }
+    // on success the browser is redirected to Microsoft, so nothing else to do here
+  });
 
   $('#auth-form').addEventListener('submit', async (e) => {
     e.preventDefault();
