@@ -53,6 +53,7 @@ a:hover { text-decoration: underline; }
   box-shadow: 0 20px 50px rgba(0,0,0,.3);
 }
 .login-logo { display: flex; flex-direction: column; align-items: center; gap: 10px; margin-bottom: 24px; }
+.login-logo .logo-img { width: 72px; height: 72px; object-fit: contain; border-radius: 14px; }
 .login-title { font-size: 15px; color: var(--text-muted); font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
 .login-card h2 { text-align: center; margin: 0 0 4px; font-size: 20px; }
 .login-card p.sub { text-align: center; color: var(--text-muted); margin: 0 0 24px; font-size: 13px; }
@@ -91,11 +92,7 @@ a:hover { text-decoration: underline; }
   position: sticky; top: 0; align-self: flex-start; height: 100vh; overflow-y: auto;
 }
 .sidebar-logo { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 0 16px 20px; border-bottom: 1px solid rgba(255,255,255,.08); margin-bottom: 12px; }
-.gzi-mark {
-  width: 46px; height: 46px; border-radius: 10px; background: var(--blue);
-  display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 17px; color: #fff; letter-spacing: -.5px;
-}
-.gzi-mark span { color: var(--orange); }
+.sidebar-logo .logo-img { width: 46px; height: 46px; object-fit: contain; border-radius: 10px; background: #fff; padding: 3px; }
 .sidebar-logo .app-name { font-size: 13px; font-weight: 700; color: #fff; letter-spacing: .03em; text-align: center; }
 .nav-section { padding: 14px 16px 6px; font-size: 10.5px; font-weight: 700; letter-spacing: .08em; color: #7c8aad; text-transform: uppercase; }
 .nav-link {
@@ -205,6 +202,10 @@ tfoot td { padding: 10px 12px; font-weight: 700; background: #f8f9fb; border-top
 .toast.ok { background: var(--green); }
 
 .chart-card canvas { max-height: 280px; }
+
+.audit-list { display: flex; flex-direction: column; gap: 10px; }
+.audit-entry { padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; }
+.audit-entry .muted { margin-top: 2px; }
 
 .attachment-chip {
   display: inline-flex; align-items: center; gap: 6px; background: #f1f3f7; border-radius: 6px; padding: 4px 8px; font-size: 12px; margin: 2px 4px 2px 0;

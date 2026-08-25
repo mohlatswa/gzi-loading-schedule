@@ -11,6 +11,8 @@ const STATUS_BADGE = { planned: 'badge-amber', loaded: 'badge-green', dispatched
 const State = {
   session: null,
   customers: [],
+  warehouses: [],
+  supervisors: [],
   route: parseHash(),
   charts: {}
 };
@@ -19,7 +21,10 @@ function parseHash() {
   const h = location.hash.replace(/^#\/?/, '');
   const parts = h.split('/').filter(Boolean);
   if (parts[0] === 'customer' && parts[1]) return { name: 'customer', id: parts[1] };
-  if (parts[0] === 'customers') return { name: 'customers' };
+  if (parts[0] === 'warehouse' && parts[1]) return { name: 'warehouse', id: parts[1] };
+  const known = ['summary', 'customers', 'warehouses', 'supervisors',
+    'report-overall', 'report-supervisor', 'report-warehouse', 'report-rpm', 'report-stock', 'report-missing'];
+  if (known.includes(parts[0])) return { name: parts[0] };
   return { name: 'summary' };
 }
 
@@ -41,6 +46,12 @@ function fmtDateShort(d) {
   if (isNaN(dt)) return d;
   return dt.toLocaleDateString('en-ZA', { weekday: 'short', day: '2-digit', month: 'short' });
 }
+function fmtDateTime(d) {
+  if (!d) return '';
+  const dt = new Date(d);
+  if (isNaN(dt)) return d;
+  return dt.toLocaleString('en-ZA', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
 function fmtTime(t) { return t ? t.slice(0, 5) : ''; }
 function todayISO() { return new Date().toISOString().slice(0, 10); }
 function addDays(iso, n) { const d = new Date(iso + 'T00:00:00'); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); }
@@ -49,6 +60,111 @@ function startOfMonth(iso) { return iso.slice(0, 7) + '-01'; }
 function endOfMonth(iso) { const d = new Date(iso.slice(0, 7) + '-01T00:00:00'); d.setMonth(d.getMonth() + 1); d.setDate(0); return d.toISOString().slice(0, 10); }
 function num(v) { return v === null || v === undefined || v === '' ? 0 : Number(v); }
 function nOrDash(v) { return v === null || v === undefined || v === '' ? '—' : Number(v); }
+function fmtCans(v) { return (v === null || v === undefined || v === '') ? '—' : Number(v).toFixed(2) + 'M'; }
+
+function isoWeek(dateStr) {
+  if (!dateStr) return null;
+  const d = new Date(dateStr + 'T00:00:00');
+  const target = new Date(d.valueOf());
+  const dayNr = (d.getDay() + 6) % 7;
+  target.setDate(target.getDate() - dayNr + 3);
+  const firstThursday = target.valueOf();
+  target.setMonth(0, 1);
+  if (target.getDay() !== 4) target.setMonth(0, 1 + ((4 - target.getDay()) + 7) % 7);
+  const week = 1 + Math.round((firstThursday - target) / 604800000);
+  return { week, year: d.getFullYear() };
+}
+function fmtWeek(dateStr) { const w = isoWeek(dateStr); return w ? `W${w.week}` : ''; }
+
+function computeTAT(arrival, depart) {
+  if (!arrival || !depart) return null;
+  const [ah, am] = arrival.split(':').map(Number);
+  const [dh, dm] = depart.split(':').map(Number);
+  let mins = (dh * 60 + dm) - (ah * 60 + am);
+  if (mins < 0) mins += 24 * 60;
+  const h = Math.floor(mins / 60), m = mins % 60;
+  return `${h}h ${String(m).padStart(2, '0')}m`;
+}
+
+async function copyText(str) {
+  try { await navigator.clipboard.writeText(str); toast('Copied to clipboard', 'ok'); }
+  catch (err) { toast('Copy failed: ' + err.message, 'err'); }
+}
+
+function currentUserStamp() {
+  const u = State.session?.user;
+  return { by: u?.id || null, email: u?.email || null };
+}
+
+async function logLoadAudit(loadId, action, payload) {
+  const stamp = currentUserStamp();
+  try {
+    await sb.from('load_audit_log').insert({ load_id: loadId, action, changed_by: stamp.by, changed_by_email: stamp.email, snapshot: payload });
+  } catch (err) { console.error('audit log failed', err); }
+}
+
+async function syncSohForLoad(load) {
+  try {
+    await sb.from('soh_movements').delete().eq('load_id', load.id).eq('movement_type', 'dispatch');
+    const isDispatched = load.status === 'loaded' || load.status === 'dispatched';
+    const hasQty = num(load.actual_pallets) > 0 || num(load.actual_cans_m) > 0;
+    if (isDispatched && hasQty) {
+      const stamp = currentUserStamp();
+      await sb.from('soh_movements').insert({
+        movement_type: 'dispatch',
+        quantity_pallets: load.actual_pallets || null,
+        quantity_cans_m: load.actual_cans_m || null,
+        movement_date: load.loading_date || todayISO(),
+        description: 'Auto: load dispatched',
+        load_id: load.id,
+        created_by: stamp.by,
+        created_by_email: stamp.email
+      });
+    }
+  } catch (err) { console.error('SOH sync failed', err); }
+}
+
+function supervisorName(id) { return State.supervisors.find(s => s.id === id)?.name || ''; }
+function warehouseName(id) { return State.warehouses.find(w => w.id === id)?.name || ''; }
+function destLabel(l) {
+  if (l.destination_type === 'warehouse') return `🏭 ${esc(warehouseName(l.warehouse_id))}`;
+  return esc(l.customers?.name || '');
+}
+
+/* -------- generic period filter (used by Summary + all report pages) -------- */
+function makePeriodState(defaultPeriod = 'month') { return { period: defaultPeriod, anchor: todayISO() }; }
+function periodRangeFor(state) {
+  const a = state.anchor;
+  if (state.period === 'day') return { from: a, to: a };
+  if (state.period === 'week') return { from: startOfWeek(a), to: addDays(startOfWeek(a), 6) };
+  if (state.period === 'month') return { from: startOfMonth(a), to: endOfMonth(a) };
+  return { from: state.customFrom || a, to: state.customTo || a };
+}
+function periodFilterHtml(state, idPrefix) {
+  const { from, to } = periodRangeFor(state);
+  return `<div class="filter-bar">
+    <div class="tab-group" id="${idPrefix}-tabs">
+      <button type="button" data-p="day" class="${state.period === 'day' ? 'active' : ''}">Day</button>
+      <button type="button" data-p="week" class="${state.period === 'week' ? 'active' : ''}">Week</button>
+      <button type="button" data-p="month" class="${state.period === 'month' ? 'active' : ''}">Month</button>
+      <button type="button" data-p="custom" class="${state.period === 'custom' ? 'active' : ''}">Custom</button>
+    </div>
+    ${state.period === 'custom' ? `
+      <div class="field"><label>From</label><input type="date" id="${idPrefix}-from" value="${esc(state.customFrom || from)}"/></div>
+      <div class="field"><label>To</label><input type="date" id="${idPrefix}-to" value="${esc(state.customTo || to)}"/></div>
+    ` : `<div class="field"><label>Jump to date</label><input type="date" id="${idPrefix}-anchor" value="${esc(state.anchor)}"/></div>`}
+    <div style="margin-left:auto; font-size:12.5px; color:var(--text-muted); align-self:center;">${fmtDate(from)} – ${fmtDate(to)}</div>
+  </div>`;
+}
+function bindPeriodFilter(state, idPrefix, rerender) {
+  $(`#${idPrefix}-tabs`).querySelectorAll('button').forEach(btn => {
+    btn.addEventListener('click', () => { state.period = btn.dataset.p; rerender(); });
+  });
+  const a = $(`#${idPrefix}-anchor`); if (a) a.addEventListener('change', () => { state.anchor = a.value; rerender(); });
+  const cf = $(`#${idPrefix}-from`), ct = $(`#${idPrefix}-to`);
+  if (cf) cf.addEventListener('change', () => { state.customFrom = cf.value; rerender(); });
+  if (ct) ct.addEventListener('change', () => { state.customTo = ct.value; rerender(); });
+}
 
 function toast(msg, kind = '') {
   let wrap = $('.toast-wrap');
@@ -90,9 +206,11 @@ const DB = {
     const { error } = await sb.from('customers').delete().eq('id', id);
     if (error) throw error;
   },
-  async getLoads({ customerId, dateFrom, dateTo } = {}) {
+  async getLoads({ customerId, warehouseId, destinationType, dateFrom, dateTo } = {}) {
     let q = sb.from('loads').select('*, customers(name, code)').order('loading_date', { ascending: true });
     if (customerId) q = q.eq('customer_id', customerId);
+    if (warehouseId) q = q.eq('warehouse_id', warehouseId);
+    if (destinationType) q = q.eq('destination_type', destinationType);
     if (dateFrom) q = q.gte('loading_date', dateFrom);
     if (dateTo) q = q.lte('loading_date', dateTo);
     const { data, error } = await q;
@@ -100,12 +218,14 @@ const DB = {
     return data;
   },
   async createLoad(payload) {
-    const { error } = await sb.from('loads').insert(payload);
+    const { data, error } = await sb.from('loads').insert(payload).select().single();
     if (error) throw error;
+    return data;
   },
   async updateLoad(id, payload) {
-    const { error } = await sb.from('loads').update(payload).eq('id', id);
+    const { data, error } = await sb.from('loads').update(payload).eq('id', id).select().single();
     if (error) throw error;
+    return data;
   },
   async deleteLoad(id) {
     const { error } = await sb.from('loads').delete().eq('id', id);
@@ -115,6 +235,11 @@ const DB = {
     const { data, error } = await sb.from('load_attachments').select('*').eq('load_id', loadId).order('uploaded_at');
     if (error) throw error;
     return data;
+  },
+  async getAllAttachmentLoadIds() {
+    const { data, error } = await sb.from('load_attachments').select('load_id');
+    if (error) throw error;
+    return new Set(data.map(r => r.load_id));
   },
   async uploadAttachment(loadId, file) {
     const path = `${loadId}/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
@@ -134,6 +259,71 @@ const DB = {
     const { data, error } = await sb.storage.from('load-attachments').createSignedUrl(path, 120);
     if (error) throw error;
     return data.signedUrl;
+  },
+
+  /* ---- warehouses ---- */
+  async getWarehouses() {
+    const { data, error } = await sb.from('warehouses').select('*').order('sort_order');
+    if (error) throw error;
+    return data;
+  },
+  async createWarehouse(payload) { const { error } = await sb.from('warehouses').insert(payload); if (error) throw error; },
+  async updateWarehouse(id, payload) { const { error } = await sb.from('warehouses').update(payload).eq('id', id); if (error) throw error; },
+  async deleteWarehouse(id) { const { error } = await sb.from('warehouses').delete().eq('id', id); if (error) throw error; },
+
+  /* ---- supervisors ---- */
+  async getSupervisors() {
+    const { data, error } = await sb.from('supervisors').select('*').order('sort_order');
+    if (error) throw error;
+    return data;
+  },
+  async createSupervisor(payload) { const { error } = await sb.from('supervisors').insert(payload); if (error) throw error; },
+  async updateSupervisor(id, payload) { const { error } = await sb.from('supervisors').update(payload).eq('id', id); if (error) throw error; },
+  async deleteSupervisor(id) { const { error } = await sb.from('supervisors').delete().eq('id', id); if (error) throw error; },
+
+  /* ---- warehouse dispatches (warehouse -> customer) ---- */
+  async getWarehouseDispatches({ warehouseId, dateFrom, dateTo } = {}) {
+    let q = sb.from('warehouse_dispatches').select('*, warehouses(name), customers(name)').order('dispatch_date', { ascending: true });
+    if (warehouseId) q = q.eq('warehouse_id', warehouseId);
+    if (dateFrom) q = q.gte('dispatch_date', dateFrom);
+    if (dateTo) q = q.lte('dispatch_date', dateTo);
+    const { data, error } = await q;
+    if (error) throw error;
+    return data;
+  },
+  async createWarehouseDispatch(payload) {
+    const { data, error } = await sb.from('warehouse_dispatches').insert(payload).select().single();
+    if (error) throw error;
+    return data;
+  },
+  async updateWarehouseDispatch(id, payload) {
+    const { data, error } = await sb.from('warehouse_dispatches').update(payload).eq('id', id).select().single();
+    if (error) throw error;
+    return data;
+  },
+  async deleteWarehouseDispatch(id) { const { error } = await sb.from('warehouse_dispatches').delete().eq('id', id); if (error) throw error; },
+
+  /* ---- RPM ---- */
+  async getRpmMovements() {
+    const { data, error } = await sb.from('rpm_movements').select('*').order('movement_date', { ascending: false });
+    if (error) throw error;
+    return data;
+  },
+  async createRpmMovement(payload) { const { error } = await sb.from('rpm_movements').insert(payload); if (error) throw error; },
+
+  /* ---- Stock on hand ---- */
+  async getSohMovements() {
+    const { data, error } = await sb.from('soh_movements').select('*').order('movement_date', { ascending: true });
+    if (error) throw error;
+    return data;
+  },
+  async createSohMovement(payload) { const { error } = await sb.from('soh_movements').insert(payload); if (error) throw error; },
+
+  /* ---- Audit ---- */
+  async getLoadAuditLog(loadId) {
+    const { data, error } = await sb.from('load_audit_log').select('*').eq('load_id', loadId).order('changed_at', { ascending: false });
+    if (error) throw error;
+    return data;
   }
 };
 
@@ -154,7 +344,7 @@ function renderLogin(mode = 'login', error = '') {
     <div class="login-screen">
       <div class="login-card">
         <div class="login-logo">
-          <div class="gzi-mark">GZ<span>I</span></div>
+          <img class="logo-img" src="assets/logo.webp" alt="GZI" />
           <div class="login-title">Loading Schedule</div>
         </div>
         <h2>${mode === 'login' ? 'Sign in' : 'Create account'}</h2>
@@ -186,7 +376,6 @@ function renderLogin(mode = 'login', error = '') {
       options: { scopes: 'email openid profile', redirectTo: window.location.origin + window.location.pathname }
     });
     if (error) { btn.disabled = false; renderLogin(mode, error.message); }
-    // on success the browser is redirected to Microsoft, so nothing else to do here
   });
 
   $('#auth-form').addEventListener('submit', async (e) => {
@@ -219,13 +408,27 @@ async function handleLogout() {
 }
 
 /* ---------------- shell / router ---------------- */
+async function fetchWithRetry(fn, retries = 2, delayMs = 700) {
+  for (let attempt = 0; ; attempt++) {
+    try { return await fn(); }
+    catch (err) {
+      if (attempt >= retries) throw err;
+      await new Promise(r => setTimeout(r, delayMs));
+    }
+  }
+}
+
 async function boot() {
   if (!State.session) { renderLogin('login'); return; }
-  try {
-    State.customers = await DB.getCustomers();
-  } catch (err) {
-    console.error(err);
-  }
+  const results = await Promise.allSettled([
+    fetchWithRetry(() => DB.getCustomers()),
+    fetchWithRetry(() => DB.getWarehouses()),
+    fetchWithRetry(() => DB.getSupervisors())
+  ]);
+  const [customers, warehouses, supervisors] = results;
+  if (customers.status === 'fulfilled') State.customers = customers.value; else console.error(customers.reason);
+  if (warehouses.status === 'fulfilled') State.warehouses = warehouses.value; else console.error(warehouses.reason);
+  if (supervisors.status === 'fulfilled') State.supervisors = supervisors.value; else console.error(supervisors.reason);
   renderShell();
   window.onhashchange = () => { State.route = parseHash(); renderContent(); };
   renderContent();
@@ -238,14 +441,23 @@ function renderShell() {
   app.innerHTML = `
     <div class="sidebar">
       <div class="sidebar-logo">
-        <div class="gzi-mark">GZ<span>I</span></div>
+        <img class="logo-img" src="assets/logo.webp" alt="GZI" />
         <div class="app-name">Loading Schedule</div>
       </div>
       <div class="nav-section">Overview</div>
-      <div class="nav-link" data-nav="summary"><span class="dot"></span>Summary &amp; Reports</div>
-      <div class="nav-section">Customers</div>
-      <div class="nav-link" data-nav="customers"><span class="dot"></span>Manage Customers</div>
+      <div class="nav-link" data-nav="summary"><span class="dot"></span>Schedule</div>
+      <div class="nav-section">Reports</div>
+      <div class="nav-link" data-nav="report-overall"><span class="dot"></span>Overall report</div>
+      <div class="nav-link" data-nav="report-supervisor"><span class="dot"></span>Planned vs Supervisor</div>
+      <div class="nav-link" data-nav="report-warehouse"><span class="dot"></span>Warehouse report</div>
+      <div class="nav-link" data-nav="report-rpm"><span class="dot"></span>RPM report</div>
+      <div class="nav-link" data-nav="report-stock"><span class="dot"></span>Stock (SOH)</div>
+      <div class="nav-link" data-nav="report-missing"><span class="dot"></span>Missing attachments</div>
+      <div class="nav-section">Manage</div>
+      <div class="nav-link" data-nav="customers"><span class="dot"></span>Customers</div>
       <div class="nav-customers-list" id="nav-customer-list"></div>
+      <div class="nav-link" data-nav="warehouses"><span class="dot"></span>Warehouses</div>
+      <div class="nav-link" data-nav="supervisors"><span class="dot"></span>Supervisors</div>
     </div>
     <div class="main">
       <div class="topbar">
@@ -261,8 +473,9 @@ function renderShell() {
       <div class="content" id="content"></div>
     </div>`;
   $('#logout-btn').addEventListener('click', handleLogout);
-  $('[data-nav="summary"]').addEventListener('click', () => { location.hash = '#/summary'; });
-  $('[data-nav="customers"]').addEventListener('click', () => { location.hash = '#/customers'; });
+  document.querySelectorAll('[data-nav]').forEach(el => {
+    el.addEventListener('click', () => { location.hash = '#/' + el.dataset.nav; });
+  });
   renderNavCustomers();
 }
 
@@ -281,9 +494,10 @@ function renderNavCustomers() {
 
 function highlightNav() {
   document.querySelectorAll('.nav-link').forEach(el => el.classList.remove('active'));
-  if (State.route.name === 'summary') { $('[data-nav="summary"]')?.classList.add('active'); }
-  else if (State.route.name === 'customers') { $('[data-nav="customers"]')?.classList.add('active'); }
-  else if (State.route.name === 'customer') { $(`[data-nav-customer="${State.route.id}"]`)?.classList.add('active'); }
+  const r = State.route.name;
+  if (r === 'customer') { $(`[data-nav-customer="${State.route.id}"]`)?.classList.add('active'); return; }
+  const key = r === 'warehouse' ? 'warehouses' : r;
+  $(`[data-nav="${key}"]`)?.classList.add('active');
 }
 
 function setTitle(title, crumb = '') {
@@ -299,6 +513,15 @@ async function renderContent() {
     if (State.route.name === 'summary') await renderSummary(content);
     else if (State.route.name === 'customers') await renderCustomers(content);
     else if (State.route.name === 'customer') await renderCustomerPage(content, State.route.id);
+    else if (State.route.name === 'warehouses') await renderWarehouses(content);
+    else if (State.route.name === 'warehouse') await renderWarehousePage(content, State.route.id);
+    else if (State.route.name === 'supervisors') await renderSupervisors(content);
+    else if (State.route.name === 'report-overall') await renderOverallReport(content);
+    else if (State.route.name === 'report-supervisor') await renderSupervisorReport(content);
+    else if (State.route.name === 'report-warehouse') await renderWarehouseReport(content);
+    else if (State.route.name === 'report-rpm') await renderRpmReport(content);
+    else if (State.route.name === 'report-stock') await renderStockReport(content);
+    else if (State.route.name === 'report-missing') await renderMissingAttachmentsReport(content);
   } catch (err) {
     console.error(err);
     content.innerHTML = `<div class="card">Error loading page: ${esc(err.message)}</div>`;
@@ -306,56 +529,37 @@ async function renderContent() {
 }
 
 /* ================= SUMMARY PAGE ================= */
-let summaryState = { period: 'week', anchor: todayISO() };
-
-function periodRange() {
-  const a = summaryState.anchor;
-  if (summaryState.period === 'day') return { from: a, to: a };
-  if (summaryState.period === 'week') return { from: startOfWeek(a), to: addDays(startOfWeek(a), 6) };
-  if (summaryState.period === 'month') return { from: startOfMonth(a), to: endOfMonth(a) };
-  return { from: summaryState.customFrom || a, to: summaryState.customTo || a };
-}
+let summaryState = { period: 'week', anchor: todayISO(), tab: 'schedule' };
 
 async function renderSummary(content) {
-  setTitle('Summary & Reports', 'Schedule overview, planned vs actioned, and deviations');
-  const { from, to } = periodRange();
-  const loads = await DB.getLoads({ dateFrom: from, dateTo: to });
+  setTitle('Schedule', 'Schedule, planned vs actual, and deviations');
+  const { from, to } = periodRangeFor(summaryState);
+  const [loads, attachmentIds] = await Promise.all([
+    DB.getLoads({ dateFrom: from, dateTo: to }),
+    DB.getAllAttachmentLoadIds()
+  ]);
 
   const totalPlanned = loads.reduce((s, l) => s + num(l.planned_pallets), 0);
   const totalActual = loads.reduce((s, l) => s + num(l.actual_pallets), 0);
-  const deviations = loads.filter(l => l.status === 'loaded' && num(l.actual_pallets) !== num(l.planned_pallets));
+  const totalPlannedCans = loads.reduce((s, l) => s + num(l.planned_cans_m), 0);
+  const totalActualCans = loads.reduce((s, l) => s + num(l.actual_cans_m), 0);
+  const deviations = loads.filter(l => (l.status === 'loaded' || l.status === 'dispatched') && num(l.actual_pallets) !== num(l.planned_pallets));
   const totalDeviation = deviations.reduce((s, l) => s + (num(l.planned_pallets) - num(l.actual_pallets)), 0);
-  const loadedCount = loads.filter(l => l.status === 'loaded').length;
+  const loadedCount = loads.filter(l => l.status === 'loaded' || l.status === 'dispatched').length;
 
   content.innerHTML = `
-    <div class="filter-bar">
-      <div class="tab-group" id="period-tabs">
-        <button data-p="day" class="${summaryState.period === 'day' ? 'active' : ''}">Day</button>
-        <button data-p="week" class="${summaryState.period === 'week' ? 'active' : ''}">Week</button>
-        <button data-p="month" class="${summaryState.period === 'month' ? 'active' : ''}">Month</button>
-        <button data-p="custom" class="${summaryState.period === 'custom' ? 'active' : ''}">Custom</button>
-      </div>
-      ${summaryState.period === 'custom' ? `
-        <div class="field"><label>From</label><input type="date" id="custom-from" value="${esc(summaryState.customFrom || from)}"/></div>
-        <div class="field"><label>To</label><input type="date" id="custom-to" value="${esc(summaryState.customTo || to)}"/></div>
-      ` : `
-        <div class="field"><label>Jump to date</label><input type="date" id="anchor-date" value="${esc(summaryState.anchor)}"/></div>
-      `}
-      <div style="margin-left:auto; font-size:12.5px; color:var(--text-muted); align-self:center;">
-        ${fmtDate(from)} – ${fmtDate(to)}
-      </div>
-    </div>
+    ${periodFilterHtml(summaryState, 'summary')}
 
     <div class="grid grid-4" style="margin-bottom:20px;">
-      <div class="stat-card"><div class="stat-label">Loads in period</div><div class="stat-value">${loads.length}</div><div class="stat-sub">${loadedCount} loaded</div></div>
-      <div class="stat-card"><div class="stat-label">Planned pallets</div><div class="stat-value">${totalPlanned}</div></div>
-      <div class="stat-card"><div class="stat-label">Actual pallets</div><div class="stat-value">${totalActual}</div></div>
+      <div class="stat-card"><div class="stat-label">Loads in period</div><div class="stat-value">${loads.length}</div><div class="stat-sub">${loadedCount} loaded/dispatched</div></div>
+      <div class="stat-card"><div class="stat-label">Planned pallets</div><div class="stat-value">${totalPlanned}</div><div class="stat-sub">${fmtCans(totalPlannedCans)} cans</div></div>
+      <div class="stat-card"><div class="stat-label">Actual pallets</div><div class="stat-value">${totalActual}</div><div class="stat-sub">${fmtCans(totalActualCans)} cans</div></div>
       <div class="stat-card"><div class="stat-label">Deviation</div><div class="stat-value" style="color:${totalDeviation > 0 ? 'var(--red)' : 'var(--green)'}">${totalDeviation > 0 ? '-' : ''}${Math.abs(totalDeviation)}</div><div class="stat-sub">${deviations.length} loads with a variance</div></div>
     </div>
 
     <div class="grid grid-2" style="margin-bottom:20px;">
       <div class="card chart-card">
-        <div class="section-title"><h2>Pallets loaded per customer</h2></div>
+        <div class="section-title"><h2>Pallets loaded per customer</h2><div class="actions"><button class="btn btn-outline btn-sm" id="copy-customer-chart">Copy</button></div></div>
         <canvas id="chart-customer"></canvas>
       </div>
       <div class="card chart-card">
@@ -364,98 +568,141 @@ async function renderSummary(content) {
       </div>
     </div>
 
-    <div class="section-title"><h2>Schedule (${fmtDate(from)} – ${fmtDate(to)})</h2></div>
-    <div class="table-wrap" style="margin-bottom:24px;">
+    <div class="tab-group" id="summary-view-tabs" style="margin-bottom:14px;">
+      <button type="button" data-t="schedule" class="${summaryState.tab === 'schedule' ? 'active' : ''}">Schedule</button>
+      <button type="button" data-t="planned" class="${summaryState.tab === 'planned' ? 'active' : ''}">Planned vs Actual</button>
+      <button type="button" data-t="deviations" class="${summaryState.tab === 'deviations' ? 'active' : ''}">Deviations</button>
+    </div>
+    <div id="summary-tab-body"></div>
+  `;
+
+  bindPeriodFilter(summaryState, 'summary', renderContent);
+  $('#summary-view-tabs').querySelectorAll('button').forEach(btn => {
+    btn.addEventListener('click', () => { summaryState.tab = btn.dataset.t; renderContent(); });
+  });
+  $('#copy-customer-chart').addEventListener('click', () => {
+    const byCustomer = {};
+    loads.forEach(l => { const n = destLabelPlain(l); byCustomer[n] = (byCustomer[n] || 0) + num(l.actual_pallets); });
+    const lines = Object.entries(byCustomer).sort((a, b) => b[1] - a[1]).map(([n, v]) => `${n}\t${v}`);
+    copyText(lines.join('\n'));
+  });
+
+  const body = $('#summary-tab-body');
+  if (summaryState.tab === 'schedule') body.innerHTML = scheduleTabHtml(loads, attachmentIds, { from, to, totalPlanned, totalActual, totalPlannedCans, totalActualCans });
+  else if (summaryState.tab === 'planned') body.innerHTML = plannedTabHtml(loads, { totalPlanned, totalActual });
+  else body.innerHTML = deviationsTabHtml(deviations, totalDeviation);
+
+  bindScheduleTabEvents(body);
+  renderCharts(loads, from, to);
+}
+
+function destLabelPlain(l) {
+  if (l.destination_type === 'warehouse') return `🏭 ${warehouseName(l.warehouse_id)}`;
+  return l.customers?.name || 'Unknown';
+}
+
+function scheduleTabHtml(loads, attachmentIds, totals) {
+  return `
+    <div class="section-title"><h2>Schedule (${fmtDate(totals.from)} – ${fmtDate(totals.to)})</h2></div>
+    <div class="table-wrap">
       <table>
         <thead><tr>
-          <th>Date</th><th>Customer</th><th>Transporter</th><th>PO / DN</th><th>Design</th>
-          <th class="num">Planned</th><th class="num">Actual</th><th>Status</th>
+          <th>Wk</th><th>Date</th><th>Destination</th><th>Transporter</th><th>PO / DN</th><th>Design</th>
+          <th class="num">Planned</th><th class="num">Actual</th><th class="num">Cans (M)</th><th>Shift</th><th>Supervisor</th><th>TAT</th><th>Status</th><th>Docs</th><th>Last edit</th>
         </tr></thead>
         <tbody>
           ${loads.length ? loads.map(l => `
             <tr>
+              <td class="small muted">${esc(fmtWeek(l.loading_date))}</td>
               <td>${esc(fmtDateShort(l.loading_date))}</td>
-              <td>${esc(l.customers?.name || '')}</td>
+              <td>${destLabel(l)}</td>
               <td>${esc(l.transporter || '')}</td>
               <td class="small muted">${esc(l.gzi_dn || l.gzi_po_number || '')}</td>
               <td>${esc(l.design || '')}</td>
               <td class="num">${nOrDash(l.planned_pallets)}</td>
               <td class="num">${nOrDash(l.actual_pallets)}</td>
+              <td class="num">${fmtCans(l.actual_cans_m ?? l.planned_cans_m)}</td>
+              <td class="small">${esc(l.shift || '')}</td>
+              <td class="small">${esc(supervisorName(l.supervisor_id))}</td>
+              <td class="small muted">${esc(l.tat || '')}</td>
               <td><span class="badge ${STATUS_BADGE[l.status] || 'badge-gray'}">${STATUS_LABELS[l.status] || l.status}</span></td>
-            </tr>`).join('') : `<tr><td colspan="8" class="empty-state">No loads scheduled in this period.</td></tr>`}
+              <td>${(l.status === 'loaded' || l.status === 'dispatched') && !attachmentIds.has(l.id) ? '<span class="badge badge-red">No doc</span>' : ''}</td>
+              <td class="small muted">${esc(l.updated_by_email || l.created_by_email || '')}<br>${esc(fmtDateTime(l.updated_at || l.created_at))}</td>
+            </tr>`).join('') : `<tr><td colspan="15" class="empty-state">No loads scheduled in this period.</td></tr>`}
         </tbody>
-        ${loads.length ? `<tfoot><tr><td colspan="5">Totals</td><td class="num">${totalPlanned}</td><td class="num">${totalActual}</td><td></td></tr></tfoot>` : ''}
+        ${loads.length ? `<tfoot><tr><td colspan="6">Totals</td><td class="num">${totals.totalPlanned}</td><td class="num">${totals.totalActual}</td><td class="num">${fmtCans(totals.totalActualCans)}</td><td colspan="6"></td></tr></tfoot>` : ''}
       </table>
-    </div>
+    </div>`;
+}
 
+function plannedTabHtml(loads, totals) {
+  return `
     <div class="section-title"><h2>Planned vs Actioned</h2></div>
-    <div class="table-wrap" style="margin-bottom:24px;">
+    <div class="table-wrap">
       <table>
-        <thead><tr><th>Date</th><th>Customer</th><th>PO / DN</th><th class="num">Planned</th><th class="num">Actioned</th><th class="num">Variance</th><th>Status</th></tr></thead>
+        <thead><tr><th>Date</th><th>Destination</th><th>PO / DN</th><th class="num">Planned</th><th class="num">Actioned</th><th class="num">Cans (M)</th><th class="num">Variance</th><th>Status</th></tr></thead>
         <tbody>
           ${loads.length ? loads.map(l => {
             const variance = num(l.planned_pallets) - num(l.actual_pallets);
             return `<tr>
               <td>${esc(fmtDateShort(l.loading_date))}</td>
-              <td>${esc(l.customers?.name || '')}</td>
+              <td>${destLabel(l)}</td>
               <td class="small muted">${esc(l.gzi_dn || l.gzi_po_number || '')}</td>
               <td class="num">${nOrDash(l.planned_pallets)}</td>
               <td class="num">${nOrDash(l.actual_pallets)}</td>
+              <td class="num">${fmtCans(l.actual_cans_m ?? l.planned_cans_m)}</td>
               <td class="num" style="color:${variance > 0 ? 'var(--red)' : variance < 0 ? 'var(--blue)' : 'inherit'}">${l.status === 'planned' ? '—' : variance}</td>
               <td><span class="badge ${STATUS_BADGE[l.status] || 'badge-gray'}">${STATUS_LABELS[l.status] || l.status}</span></td>
             </tr>`;
-          }).join('') : `<tr><td colspan="7" class="empty-state">No data.</td></tr>`}
+          }).join('') : `<tr><td colspan="8" class="empty-state">No data.</td></tr>`}
         </tbody>
       </table>
-    </div>
+    </div>`;
+}
 
+function deviationsTabHtml(deviations, totalDeviation) {
+  return `
     <div class="section-title"><h2>Deviation report</h2></div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Date</th><th>Customer</th><th>PO / DN</th><th class="num">Planned</th><th class="num">Actual</th><th class="num">Deviation</th><th>Reason</th></tr></thead>
+        <thead><tr><th>Date</th><th>Destination</th><th>PO / DN</th><th class="num">Planned</th><th class="num">Actual</th><th class="num">Deviation</th><th>Comment</th></tr></thead>
         <tbody id="deviation-rows">
           ${deviations.length ? deviations.map(l => `
             <tr>
               <td>${esc(fmtDateShort(l.loading_date))}</td>
-              <td>${esc(l.customers?.name || '')}</td>
+              <td>${destLabel(l)}</td>
               <td class="small muted">${esc(l.gzi_dn || l.gzi_po_number || '')}</td>
               <td class="num">${nOrDash(l.planned_pallets)}</td>
               <td class="num">${nOrDash(l.actual_pallets)}</td>
               <td class="num" style="color:var(--red)">${num(l.planned_pallets) - num(l.actual_pallets)}</td>
               <td>
-                <input type="text" class="deviation-reason-input" data-load="${l.id}" value="${esc(l.deviation_reason || '')}" placeholder="Add reason…" style="width:220px; padding:5px 7px; border:1px solid var(--border); border-radius:6px;" />
+                <input type="text" class="deviation-reason-input" data-load="${l.id}" value="${esc(l.deviation_reason || '')}" placeholder="Add comment…" style="width:220px; padding:5px 7px; border:1px solid var(--border); border-radius:6px;" />
               </td>
             </tr>`).join('') : `<tr><td colspan="7" class="empty-state">No deviations in this period 🎉</td></tr>`}
         </tbody>
         ${deviations.length ? `<tfoot><tr><td colspan="5">Total deviation</td><td class="num" style="color:var(--red)">${totalDeviation}</td><td></td></tr></tfoot>` : ''}
       </table>
-    </div>
-  `;
+    </div>`;
+}
 
-  $('#period-tabs').querySelectorAll('button').forEach(btn => {
-    btn.addEventListener('click', () => { summaryState.period = btn.dataset.p; renderContent(); });
-  });
-  const anchorInput = $('#anchor-date');
-  if (anchorInput) anchorInput.addEventListener('change', () => { summaryState.anchor = anchorInput.value; renderContent(); });
-  const cf = $('#custom-from'), ct = $('#custom-to');
-  if (cf) cf.addEventListener('change', () => { summaryState.customFrom = cf.value; renderContent(); });
-  if (ct) ct.addEventListener('change', () => { summaryState.customTo = ct.value; renderContent(); });
-
-  content.querySelectorAll('.deviation-reason-input').forEach(inp => {
+function bindScheduleTabEvents(root) {
+  root.querySelectorAll('.deviation-reason-input').forEach(inp => {
     inp.addEventListener('change', async () => {
-      try { await DB.updateLoad(inp.dataset.load, { deviation_reason: inp.value }); toast('Reason saved', 'ok'); }
+      try {
+        const stamp = currentUserStamp();
+        await DB.updateLoad(inp.dataset.load, { deviation_reason: inp.value, updated_by: stamp.by, updated_by_email: stamp.email, updated_at: new Date().toISOString() });
+        toast('Comment saved', 'ok');
+      }
       catch (err) { toast(err.message, 'err'); }
     });
   });
-
-  renderCharts(loads, from, to);
 }
 
 function renderCharts(loads, from, to) {
   Object.values(State.charts).forEach(c => c && c.destroy());
 
   const byCustomer = {};
-  loads.forEach(l => { const n = l.customers?.name || 'Unknown'; byCustomer[n] = (byCustomer[n] || 0) + num(l.actual_pallets); });
+  loads.forEach(l => { const n = destLabelPlain(l); byCustomer[n] = (byCustomer[n] || 0) + num(l.actual_pallets); });
   const custEntries = Object.entries(byCustomer).sort((a, b) => b[1] - a[1]).slice(0, 10);
 
   const ctx1 = $('#chart-customer');
@@ -473,7 +720,7 @@ function renderCharts(loads, from, to) {
   const devByDay = {};
   days.forEach(d => devByDay[d] = 0);
   loads.forEach(l => {
-    if (l.status === 'loaded' && l.loading_date && devByDay[l.loading_date] !== undefined) {
+    if ((l.status === 'loaded' || l.status === 'dispatched') && l.loading_date && devByDay[l.loading_date] !== undefined) {
       devByDay[l.loading_date] += (num(l.planned_pallets) - num(l.actual_pallets));
     }
   });
@@ -493,7 +740,7 @@ async function renderCustomers(content) {
   setTitle('Customers', 'All customer loading schedules');
   const loads = await DB.getLoads({});
   const loadCounts = {};
-  loads.forEach(l => { loadCounts[l.customer_id] = (loadCounts[l.customer_id] || 0) + 1; });
+  loads.forEach(l => { if (l.customer_id) loadCounts[l.customer_id] = (loadCounts[l.customer_id] || 0) + 1; });
 
   content.innerHTML = `
     <div class="section-title">
@@ -593,7 +840,7 @@ async function renderCustomerPage(content, customerId) {
   if (!customer) { content.innerHTML = `<div class="card">Customer not found. <a href="#/customers">Back to customers</a></div>`; return; }
   setTitle(customer.name, `${customer.despatching_plant || 'GZI'} · Customer loading schedule`);
 
-  const loads = await DB.getLoads({ customerId });
+  const [loads, attachmentIds] = await Promise.all([DB.getLoads({ customerId }), DB.getAllAttachmentLoadIds()]);
   const totalPlanned = loads.reduce((s, l) => s + num(l.planned_pallets), 0);
   const totalActual = loads.reduce((s, l) => s + num(l.actual_pallets), 0);
 
@@ -624,41 +871,46 @@ async function renderCustomerPage(content, customerId) {
     <div class="table-wrap">
       <table>
         <thead><tr>
-          <th>Loading date</th><th>Offloading date</th><th>Transporter</th><th>Reg / Fleet</th><th>PO / DN</th>
-          <th>Design</th><th class="num">Planned</th><th class="num">Actual</th><th>Status</th><th>Docs</th><th></th>
+          <th>Wk</th><th>Loading date</th><th>Transporter</th><th>Reg / Fleet</th><th>PO / DN</th>
+          <th>Design</th><th class="num">Planned</th><th class="num">Actual</th><th class="num">Cans (M)</th><th>Shift</th><th>Supervisor</th><th>Status</th><th>Docs</th><th></th>
         </tr></thead>
         <tbody id="load-rows">
-          ${loads.length ? loads.map(rowHtml).join('') : `<tr><td colspan="11" class="empty-state">No loads yet for this customer. Click "New load" to add one.</td></tr>`}
+          ${loads.length ? loads.map(rowHtml).join('') : `<tr><td colspan="14" class="empty-state">No loads yet for this customer. Click "New load" to add one.</td></tr>`}
         </tbody>
-        ${loads.length ? `<tfoot><tr><td colspan="6">Totals</td><td class="num">${totalPlanned}</td><td class="num">${totalActual}</td><td colspan="3"></td></tr></tfoot>` : ''}
+        ${loads.length ? `<tfoot><tr><td colspan="6">Totals</td><td class="num">${totalPlanned}</td><td class="num">${totalActual}</td><td colspan="5"></td></tr></tfoot>` : ''}
       </table>
     </div>
   `;
 
   function rowHtml(l) {
     return `<tr data-row="${l.id}">
+      <td class="small muted">${esc(fmtWeek(l.loading_date))}</td>
       <td>${esc(fmtDateShort(l.loading_date))}</td>
-      <td>${esc(fmtDateShort(l.offloading_date))}</td>
       <td>${esc(l.transporter || '')}</td>
       <td class="small">${esc(l.reg_number || l.fleet_details || '')}</td>
       <td class="small muted">${esc(l.gzi_dn || l.gzi_po_number || '')}</td>
       <td>${esc(l.design || '')}</td>
       <td class="num">${nOrDash(l.planned_pallets)}</td>
       <td class="num">${nOrDash(l.actual_pallets)}</td>
+      <td class="num">${fmtCans(l.actual_cans_m ?? l.planned_cans_m)}</td>
+      <td class="small">${esc(l.shift || '')}</td>
+      <td class="small">${esc(supervisorName(l.supervisor_id))}</td>
       <td><span class="badge ${STATUS_BADGE[l.status] || 'badge-gray'}">${STATUS_LABELS[l.status] || l.status}</span></td>
-      <td><span class="link-btn" data-docs="${l.id}">Attachments</span></td>
+      <td>${(l.status === 'loaded' || l.status === 'dispatched') && !attachmentIds.has(l.id) ? '<span class="badge badge-red">No doc</span>' : '<span class="link-btn" data-docs="' + l.id + '">Docs</span>'}</td>
       <td class="row-actions">
         <button class="btn btn-outline btn-sm" data-edit-load="${l.id}">Edit</button>
+        <button class="btn btn-outline btn-sm" data-history="${l.id}">History</button>
         <button class="btn btn-outline btn-sm" data-delete-load="${l.id}" style="color:var(--red); border-color:#f3caca;">Del</button>
       </td>
     </tr>`;
   }
 
   $('#edit-customer-btn').addEventListener('click', () => openCustomerModal(customer));
-  $('#add-load-btn').addEventListener('click', () => openLoadModal(customer, null));
+  $('#add-load-btn').addEventListener('click', () => openLoadModal({ customer }, null));
   content.querySelectorAll('[data-edit-load]').forEach(el => el.addEventListener('click', () => {
-    openLoadModal(customer, loads.find(l => l.id === el.dataset.editLoad));
+    openLoadModal({ customer }, loads.find(l => l.id === el.dataset.editLoad));
   }));
+  content.querySelectorAll('[data-history]').forEach(el => el.addEventListener('click', () => openLoadHistoryModal(el.dataset.history)));
   content.querySelectorAll('[data-delete-load]').forEach(el => el.addEventListener('click', async () => {
     if (!confirm('Delete this load?')) return;
     try { await DB.deleteLoad(el.dataset.deleteLoad); toast('Load deleted', 'ok'); renderContent(); }
@@ -667,18 +919,47 @@ async function renderCustomerPage(content, customerId) {
   content.querySelectorAll('[data-docs]').forEach(el => el.addEventListener('click', () => openAttachmentsModal(el.dataset.docs)));
 }
 
-function openLoadModal(customer, load) {
+/* ================= LOAD MODAL (shared: customer-destined or warehouse-destined) ================= */
+function openLoadModal(ctx, load) {
   const isEdit = !!load;
   const v = (f, d = '') => esc(load?.[f] ?? d);
+  let destType = load?.destination_type || (ctx.warehouse ? 'warehouse' : 'customer');
+  const selectedCustomerId = load?.customer_id || ctx.customer?.id || '';
+  const selectedWarehouseId = load?.warehouse_id || ctx.warehouse?.id || '';
+
+  const titleTarget = destType === 'warehouse'
+    ? (State.warehouses.find(w => w.id === selectedWarehouseId)?.name || '')
+    : (ctx.customer?.name || State.customers.find(c => c.id === selectedCustomerId)?.name || '');
+
   openModal(`
-    <div class="modal-header"><h3>${isEdit ? 'Edit load' : 'New load'} — ${esc(customer.name)}</h3><button class="modal-close" id="modal-close">&times;</button></div>
+    <div class="modal-header"><h3 id="load-modal-title">${isEdit ? 'Edit load' : 'New load'} — ${esc(titleTarget)}</h3><button class="modal-close" id="modal-close">&times;</button></div>
     <div class="modal-body">
       <form id="load-form">
         <div class="form-grid">
+          <div class="field span-2"><label>Destination</label>
+            <div class="tab-group" id="f-dest-type">
+              <button type="button" data-d="customer" class="${destType === 'customer' ? 'active' : ''}">Customer</button>
+              <button type="button" data-d="warehouse" class="${destType === 'warehouse' ? 'active' : ''}">Warehouse</button>
+            </div>
+          </div>
+          <div class="field span-2" id="f-dest-customer-wrap" style="${destType === 'warehouse' ? 'display:none;' : ''}">
+            <label>Customer</label>
+            <select id="f-dest-customer">
+              <option value="">— Select customer —</option>
+              ${State.customers.map(c => `<option value="${c.id}" ${selectedCustomerId === c.id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
+            </select>
+          </div>
+          <div class="field span-2" id="f-dest-warehouse-wrap" style="${destType === 'customer' ? 'display:none;' : ''}">
+            <label>Warehouse</label>
+            <select id="f-dest-warehouse">
+              <option value="">— Select warehouse —</option>
+              ${State.warehouses.map(w => `<option value="${w.id}" ${selectedWarehouseId === w.id ? 'selected' : ''}>${esc(w.name)}</option>`).join('')}
+            </select>
+          </div>
           <div class="field"><label>Loading date</label><input type="date" id="f-loading-date" value="${v('loading_date')}" /></div>
           <div class="field"><label>Offloading date</label><input type="date" id="f-offloading-date" value="${v('offloading_date')}" /></div>
           <div class="field"><label>Time slot</label><input id="f-time-slot" value="${v('time_slot')}" placeholder="e.g. 07:00-16:00" /></div>
-          <div class="field"><label>Despatching plant</label><input id="f-plant" value="${v('despatching_plant', customer.despatching_plant || 'GZI')}" /></div>
+          <div class="field"><label>Despatching plant</label><input id="f-plant" value="${v('despatching_plant', ctx.customer?.despatching_plant || 'GZI')}" /></div>
           <div class="field"><label>Transporter</label><input id="f-transporter" value="${v('transporter')}" /></div>
           <div class="field"><label>Fleet / driver</label><input id="f-fleet" value="${v('fleet_details')}" /></div>
           <div class="field"><label>Reg number</label><input id="f-reg" value="${v('reg_number')}" /></div>
@@ -689,6 +970,18 @@ function openLoadModal(customer, load) {
           <div class="field"><label>Design / Description</label><input id="f-design" value="${v('design')}" /></div>
           <div class="field"><label>Planned pallets</label><input type="number" step="0.01" id="f-planned" value="${v('planned_pallets')}" /></div>
           <div class="field"><label>Actual pallets</label><input type="number" step="0.01" id="f-actual" value="${v('actual_pallets')}" /></div>
+          <div class="field"><label>Planned cans (M)</label><input type="number" step="0.01" id="f-planned-cans" value="${v('planned_cans_m')}" /></div>
+          <div class="field"><label>Actual cans (M)</label><input type="number" step="0.01" id="f-actual-cans" value="${v('actual_cans_m')}" /></div>
+          <div class="field"><label>Supervisor</label>
+            <select id="f-supervisor">
+              <option value="">—</option>
+              ${State.supervisors.filter(s => s.active).map(s => `<option value="${s.id}" ${load?.supervisor_id === s.id ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}
+            </select>
+          </div>
+          <div class="field"><label>Shift</label>
+            <input id="f-shift" list="shift-options" value="${v('shift')}" placeholder="e.g. Day Shift" />
+            <datalist id="shift-options"><option value="Day Shift"><option value="Night Shift"><option value="Morning Shift"><option value="Afternoon Shift"></datalist>
+          </div>
           <div class="field"><label>Status</label>
             <select id="f-status">
               ${Object.entries(STATUS_LABELS).map(([k, lbl]) => `<option value="${k}" ${load?.status === k ? 'selected' : (!load && k === 'planned') ? 'selected' : ''}>${lbl}</option>`).join('')}
@@ -698,7 +991,7 @@ function openLoadModal(customer, load) {
           <div class="field"><label>Loading bay time</label><input type="time" id="f-bay" value="${v('loading_bay_time')}" /></div>
           <div class="field"><label>Depart time</label><input type="time" id="f-depart" value="${v('depart_time')}" /></div>
           <div class="field span-2"><label>Comments</label><textarea id="f-comments" rows="2">${v('comments')}</textarea></div>
-          <div class="field span-2"><label>Deviation reason <span class="muted">(if planned ≠ actual)</span></label><input id="f-deviation" value="${v('deviation_reason')}" /></div>
+          <div class="field span-2"><label>Deviation comment <span class="muted">(if planned ≠ actual)</span></label><input id="f-deviation" value="${v('deviation_reason')}" /></div>
         </div>
       </form>
     </div>
@@ -709,10 +1002,28 @@ function openLoadModal(customer, load) {
   `);
   $('#modal-close').addEventListener('click', closeModal);
   $('#modal-cancel').addEventListener('click', closeModal);
+
+  $('#f-dest-type').querySelectorAll('button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      destType = btn.dataset.d;
+      $('#f-dest-type').querySelectorAll('button').forEach(b => b.classList.toggle('active', b === btn));
+      $('#f-dest-customer-wrap').style.display = destType === 'customer' ? '' : 'none';
+      $('#f-dest-warehouse-wrap').style.display = destType === 'warehouse' ? '' : 'none';
+    });
+  });
+
   $('#modal-save').addEventListener('click', async () => {
     const g = (id) => { const x = $(id).value; return x === '' ? null : x; };
+    const customer_id = destType === 'customer' ? g('#f-dest-customer') : null;
+    const warehouse_id = destType === 'warehouse' ? g('#f-dest-warehouse') : null;
+    if (destType === 'customer' && !customer_id) { toast('Select a customer', 'err'); return; }
+    if (destType === 'warehouse' && !warehouse_id) { toast('Select a warehouse', 'err'); return; }
+
+    const arrival = g('#f-arrival'), depart = g('#f-depart');
+    const stamp = currentUserStamp();
     const payload = {
-      customer_id: customer.id,
+      destination_type: destType,
+      customer_id, warehouse_id,
       loading_date: g('#f-loading-date'),
       offloading_date: g('#f-offloading-date'),
       time_slot: g('#f-time-slot'),
@@ -727,21 +1038,50 @@ function openLoadModal(customer, load) {
       design: g('#f-design'),
       planned_pallets: g('#f-planned'),
       actual_pallets: g('#f-actual'),
+      planned_cans_m: g('#f-planned-cans'),
+      actual_cans_m: g('#f-actual-cans'),
+      supervisor_id: g('#f-supervisor'),
+      shift: g('#f-shift'),
       status: $('#f-status').value,
-      arrival_time: g('#f-arrival'),
+      arrival_time: arrival,
       loading_bay_time: g('#f-bay'),
-      depart_time: g('#f-depart'),
+      depart_time: depart,
+      tat: computeTAT(arrival, depart),
       comments: g('#f-comments'),
       deviation_reason: g('#f-deviation')
     };
+    if (isEdit) { payload.updated_by = stamp.by; payload.updated_by_email = stamp.email; payload.updated_at = new Date().toISOString(); }
+    else { payload.created_by = stamp.by; payload.created_by_email = stamp.email; }
+
     try {
-      if (isEdit) await DB.updateLoad(load.id, payload);
-      else await DB.createLoad(payload);
+      let saved;
+      if (isEdit) saved = await DB.updateLoad(load.id, payload);
+      else saved = await DB.createLoad(payload);
+      await logLoadAudit(saved.id, isEdit ? 'update' : 'insert', payload);
+      await syncSohForLoad(saved);
       closeModal();
       toast(isEdit ? 'Load updated' : 'Load added', 'ok');
       renderContent();
     } catch (err) { toast(err.message, 'err'); }
   });
+}
+
+async function openLoadHistoryModal(loadId) {
+  openModal(`
+    <div class="modal-header"><h3>Edit history</h3><button class="modal-close" id="modal-close">&times;</button></div>
+    <div class="modal-body"><div id="history-list">Loading…</div></div>
+    <div class="modal-footer"><button class="btn btn-outline" id="modal-cancel">Close</button></div>
+  `);
+  $('#modal-close').addEventListener('click', closeModal);
+  $('#modal-cancel').addEventListener('click', closeModal);
+  try {
+    const rows = await DB.getLoadAuditLog(loadId);
+    $('#history-list').innerHTML = rows.length ? `<div class="audit-list">${rows.map(r => `
+      <div class="audit-entry">
+        <div><b>${r.action === 'insert' ? 'Created' : 'Edited'}</b> by ${esc(r.changed_by_email || 'unknown')}</div>
+        <div class="muted small">${esc(fmtDateTime(r.changed_at))}</div>
+      </div>`).join('')}</div>` : `<div class="muted small">No history recorded yet.</div>`;
+  } catch (err) { $('#history-list').innerHTML = `<div class="login-error">${esc(err.message)}</div>`; }
 }
 
 async function openAttachmentsModal(loadId) {
