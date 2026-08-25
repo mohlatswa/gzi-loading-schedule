@@ -125,6 +125,11 @@ async function syncSohForLoad(load) {
 }
 
 function supervisorName(id) { return State.supervisors.find(s => s.id === id)?.name || ''; }
+function supervisorCell(rec) {
+  const name = esc(supervisorName(rec.supervisor_id));
+  if (!rec.supervisor_note) return name;
+  return `${name} <span class="badge badge-amber" title="${esc(rec.supervisor_note)}">note</span>`;
+}
 function warehouseName(id) { return State.warehouses.find(w => w.id === id)?.name || ''; }
 function destLabel(l) {
   if (l.destination_type === 'warehouse') return `🏭 ${esc(warehouseName(l.warehouse_id))}`;
@@ -623,7 +628,7 @@ function scheduleTabHtml(loads, attachmentIds, totals) {
               <td class="num">${nOrDash(l.actual_pallets)}</td>
               <td class="num">${fmtCans(l.actual_cans_m ?? l.planned_cans_m)}</td>
               <td class="small">${esc(l.shift || '')}</td>
-              <td class="small">${esc(supervisorName(l.supervisor_id))}</td>
+              <td class="small">${supervisorCell(l)}</td>
               <td class="small muted">${esc(l.tat || '')}</td>
               <td><span class="badge ${STATUS_BADGE[l.status] || 'badge-gray'}">${STATUS_LABELS[l.status] || l.status}</span></td>
               <td>${(l.status === 'loaded' || l.status === 'dispatched') && !attachmentIds.has(l.id) ? '<span class="badge badge-red">No doc</span>' : ''}</td>
@@ -894,7 +899,7 @@ async function renderCustomerPage(content, customerId) {
       <td class="num">${nOrDash(l.actual_pallets)}</td>
       <td class="num">${fmtCans(l.actual_cans_m ?? l.planned_cans_m)}</td>
       <td class="small">${esc(l.shift || '')}</td>
-      <td class="small">${esc(supervisorName(l.supervisor_id))}</td>
+      <td class="small">${supervisorCell(l)}</td>
       <td><span class="badge ${STATUS_BADGE[l.status] || 'badge-gray'}">${STATUS_LABELS[l.status] || l.status}</span></td>
       <td>${(l.status === 'loaded' || l.status === 'dispatched') && !attachmentIds.has(l.id) ? '<span class="badge badge-red">No doc</span>' : '<span class="link-btn" data-docs="' + l.id + '">Docs</span>'}</td>
       <td class="row-actions">
@@ -975,13 +980,16 @@ function openLoadModal(ctx, load) {
           <div class="field"><label>Supervisor</label>
             <select id="f-supervisor">
               <option value="">—</option>
-              ${State.supervisors.filter(s => s.active).map(s => `<option value="${s.id}" ${load?.supervisor_id === s.id ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}
+              ${State.supervisors.filter(s => s.active).map(s => `<option value="${s.id}" data-shift="${esc(s.shift || '')}" ${load?.supervisor_id === s.id ? 'selected' : ''}>${esc(s.name)}${s.shift ? ' (Shift ' + esc(s.shift) + ')' : ''}</option>`).join('')}
             </select>
           </div>
           <div class="field"><label>Shift</label>
-            <input id="f-shift" list="shift-options" value="${v('shift')}" placeholder="e.g. Day Shift" />
-            <datalist id="shift-options"><option value="Day Shift"><option value="Night Shift"><option value="Morning Shift"><option value="Afternoon Shift"></datalist>
+            <select id="f-shift">
+              <option value="">—</option>
+              ${['A', 'B', 'C', 'D'].map(s => `<option value="Shift ${s}" ${load?.shift === 'Shift ' + s ? 'selected' : ''}>Shift ${s}</option>`).join('')}
+            </select>
           </div>
+          <div class="field span-2"><label>Comment <span class="muted">(if the rightful supervisor for this shift is absent)</span></label><input id="f-supervisor-note" value="${v('supervisor_note')}" placeholder="e.g. covering for Shift B while J. Dlamini is on leave" /></div>
           <div class="field"><label>Status</label>
             <select id="f-status">
               ${Object.entries(STATUS_LABELS).map(([k, lbl]) => `<option value="${k}" ${load?.status === k ? 'selected' : (!load && k === 'planned') ? 'selected' : ''}>${lbl}</option>`).join('')}
@@ -1010,6 +1018,11 @@ function openLoadModal(ctx, load) {
       $('#f-dest-customer-wrap').style.display = destType === 'customer' ? '' : 'none';
       $('#f-dest-warehouse-wrap').style.display = destType === 'warehouse' ? '' : 'none';
     });
+  });
+
+  $('#f-supervisor').addEventListener('change', (e) => {
+    const shift = e.target.selectedOptions[0]?.dataset.shift;
+    if (shift) $('#f-shift').value = 'Shift ' + shift;
   });
 
   $('#modal-save').addEventListener('click', async () => {
@@ -1042,6 +1055,7 @@ function openLoadModal(ctx, load) {
       actual_cans_m: g('#f-actual-cans'),
       supervisor_id: g('#f-supervisor'),
       shift: g('#f-shift'),
+      supervisor_note: g('#f-supervisor-note'),
       status: $('#f-status').value,
       arrival_time: arrival,
       loading_bay_time: g('#f-bay'),

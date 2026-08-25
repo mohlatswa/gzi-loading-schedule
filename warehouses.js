@@ -151,7 +151,7 @@ async function renderWarehousePage(content, warehouseId) {
               <td class="num">${nOrDash(d.planned_pallets)}</td>
               <td class="num">${nOrDash(d.actual_pallets)}</td>
               <td class="num">${fmtCans(d.actual_cans_m ?? d.planned_cans_m)}</td>
-              <td class="small">${esc(d.shift || '')} ${d.supervisor_id ? '· ' + esc(supervisorName(d.supervisor_id)) : ''}</td>
+              <td class="small">${esc(d.shift || '')} ${d.supervisor_id ? '· ' + supervisorCell(d) : ''}</td>
               <td><span class="badge ${STATUS_BADGE[d.status] || 'badge-gray'}">${STATUS_LABELS[d.status] || d.status}</span></td>
               <td><button class="btn btn-outline btn-sm" data-edit-dispatch="${d.id}">Edit</button></td>
             </tr>`).join('') : `<tr><td colspan="9" class="empty-state">No dispatches recorded yet.</td></tr>`}
@@ -196,12 +196,16 @@ function openWarehouseDispatchModal(warehouse, dispatch) {
           <div class="field"><label>Supervisor</label>
             <select id="f-supervisor">
               <option value="">—</option>
-              ${State.supervisors.filter(s => s.active).map(s => `<option value="${s.id}" ${dispatch?.supervisor_id === s.id ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}
+              ${State.supervisors.filter(s => s.active).map(s => `<option value="${s.id}" data-shift="${esc(s.shift || '')}" ${dispatch?.supervisor_id === s.id ? 'selected' : ''}>${esc(s.name)}${s.shift ? ' (Shift ' + esc(s.shift) + ')' : ''}</option>`).join('')}
             </select>
           </div>
-          <div class="field"><label>Shift</label><input id="f-shift" list="shift-options" value="${v('shift')}" />
-            <datalist id="shift-options"><option value="Day Shift"><option value="Night Shift"><option value="Morning Shift"><option value="Afternoon Shift"></datalist>
+          <div class="field"><label>Shift</label>
+            <select id="f-shift">
+              <option value="">—</option>
+              ${['A', 'B', 'C', 'D'].map(s => `<option value="Shift ${s}" ${dispatch?.shift === 'Shift ' + s ? 'selected' : ''}>Shift ${s}</option>`).join('')}
+            </select>
           </div>
+          <div class="field span-2"><label>Comment <span class="muted">(if the rightful supervisor for this shift is absent)</span></label><input id="f-supervisor-note" value="${v('supervisor_note')}" /></div>
           <div class="field"><label>Status</label>
             <select id="f-status">
               ${Object.entries(STATUS_LABELS).map(([k, lbl]) => `<option value="${k}" ${dispatch?.status === k ? 'selected' : (!dispatch && k === 'planned') ? 'selected' : ''}>${lbl}</option>`).join('')}
@@ -218,6 +222,10 @@ function openWarehouseDispatchModal(warehouse, dispatch) {
   `);
   $('#modal-close').addEventListener('click', closeModal);
   $('#modal-cancel').addEventListener('click', closeModal);
+  $('#f-supervisor').addEventListener('change', (e) => {
+    const shift = e.target.selectedOptions[0]?.dataset.shift;
+    if (shift) $('#f-shift').value = 'Shift ' + shift;
+  });
   $('#modal-save').addEventListener('click', async () => {
     const g = (id) => { const x = $(id).value; return x === '' ? null : x; };
     const customer_id = g('#f-customer');
@@ -235,6 +243,7 @@ function openWarehouseDispatchModal(warehouse, dispatch) {
       actual_cans_m: g('#f-actual-cans'),
       supervisor_id: g('#f-supervisor'),
       shift: g('#f-shift'),
+      supervisor_note: g('#f-supervisor-note'),
       status: $('#f-status').value,
       comments: g('#f-comments')
     };
