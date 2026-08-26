@@ -77,6 +77,7 @@ function startOfMonth(iso) { return iso.slice(0, 7) + '-01'; }
 function endOfMonth(iso) { const d = new Date(iso.slice(0, 7) + '-01T00:00:00Z'); d.setUTCMonth(d.getUTCMonth() + 1); d.setUTCDate(0); return d.toISOString().slice(0, 10); }
 function num(v) { return v === null || v === undefined || v === '' ? 0 : Number(v); }
 function nOrDash(v) { return v === null || v === undefined || v === '' ? '—' : Number(v); }
+function round2(v) { const n = Number(v) || 0; return Math.round(n * 100) / 100; }
 function fmtCans(v) { return (v === null || v === undefined || v === '') ? '—' : Number(v).toFixed(2) + 'M'; }
 
 const CANS_PER_PALLET = 5446;
@@ -986,8 +987,15 @@ function renderCharts(loads, from, to) {
 async function renderCustomers(content) {
   setTitle('Customers', 'All customer loading schedules');
   const loads = await DB.getLoads({});
-  const loadCounts = {};
-  loads.forEach(l => { if (l.customer_id) loadCounts[l.customer_id] = (loadCounts[l.customer_id] || 0) + 1; });
+  const totalsByCustomer = {};
+  loads.forEach(l => {
+    if (!l.customer_id) return;
+    const t = totalsByCustomer[l.customer_id] || { count: 0, planned: 0, actual: 0 };
+    t.count += 1;
+    t.planned += num(l.planned_pallets);
+    t.actual += num(l.actual_pallets);
+    totalsByCustomer[l.customer_id] = t;
+  });
 
   content.innerHTML = `
     <div class="section-title">
@@ -997,17 +1005,21 @@ async function renderCustomers(content) {
     <div class="grid grid-3" id="customer-grid"></div>
   `;
   const grid = $('#customer-grid');
-  grid.innerHTML = State.customers.map(c => `
+  grid.innerHTML = State.customers.map(c => {
+    const t = totalsByCustomer[c.id] || { count: 0, planned: 0, actual: 0 };
+    return `
     <div class="customer-card" data-open="${c.id}">
       <div class="cname">${esc(c.name)}</div>
       <div class="cmeta">${esc(c.despatching_plant || 'GZI')} ${c.contact_person ? '· ' + esc(c.contact_person) : ''}</div>
-      <div class="cstats"><span><b>${loadCounts[c.id] || 0}</b> loads</span><span class="badge ${c.active ? 'badge-green' : 'badge-gray'}">${c.active ? 'Active' : 'Inactive'}</span></div>
+      <div class="cstats"><span><b>${t.count}</b> loads</span><span class="badge ${c.active ? 'badge-green' : 'badge-gray'}">${c.active ? 'Active' : 'Inactive'}</span></div>
+      <div class="cstats" style="margin-top:2px;"><span><b>${round2(t.actual)}</b> / ${round2(t.planned)} pallets</span><span>${fmtCansPair(t.planned, t.actual)} cans</span></div>
       <div class="card-actions">
         <button class="btn btn-outline btn-sm" data-edit="${c.id}">Edit</button>
         <button class="btn btn-outline btn-sm" data-delete="${c.id}" style="color:var(--red); border-color:#f3caca;">Delete</button>
       </div>
     </div>
-  `).join('') || `<div class="empty-state">No customers yet. Add your first one.</div>`;
+  `;
+  }).join('') || `<div class="empty-state">No customers yet. Add your first one.</div>`;
 
   grid.querySelectorAll('[data-open]').forEach(el => el.addEventListener('click', (e) => {
     if (e.target.closest('button')) return;
