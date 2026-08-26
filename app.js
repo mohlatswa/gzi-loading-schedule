@@ -789,7 +789,7 @@ async function renderSummary(content) {
       <div class="stat-card"><div class="stat-label">Loads in period</div><div class="stat-value">${loads.length}</div><div class="stat-sub">${loadedCount} loaded/dispatched</div></div>
       <div class="stat-card"><div class="stat-label">Planned pallets</div><div class="stat-value">${totalPlanned}</div><div class="stat-sub">${fmtCans(totalPlannedCans)} cans</div></div>
       <div class="stat-card"><div class="stat-label">Actual pallets</div><div class="stat-value">${totalActual}</div><div class="stat-sub">${fmtCans(totalActualCans)} cans</div></div>
-      <div class="stat-card"><div class="stat-label">Deviation</div><div class="stat-value" style="color:${totalDeviation > 0 ? 'var(--red)' : 'var(--green)'}">${totalDeviation > 0 ? '-' : ''}${Math.abs(totalDeviation)}</div><div class="stat-sub">${deviations.length} loads with a variance</div></div>
+      <div class="stat-card"><div class="stat-label">Deviation</div><div class="stat-value" style="color:${totalDeviation > 0 ? 'var(--red)' : 'var(--green)'}">${totalDeviation > 0 ? '-' : ''}${Math.abs(totalDeviation)}</div><div class="stat-sub">${fmtCans(cansFromPallets(Math.abs(totalDeviation)))} cans · ${deviations.length} loads</div></div>
     </div>
 
     <div class="grid grid-2" style="margin-bottom:20px;">
@@ -912,22 +912,26 @@ function deviationsTabHtml(deviations, totalDeviation) {
     <div class="section-title"><h2>Deviation report</h2></div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Date</th><th>Destination</th><th>PO / DN</th><th class="num">Planned</th><th class="num">Actual</th><th class="num">Deviation</th><th>Comment</th></tr></thead>
+        <thead><tr><th>Date</th><th>Destination</th><th>PO / DN</th><th class="num">Planned</th><th class="num">Actual</th><th class="num">Deviation</th><th class="num">Cans (M)</th><th>Comment</th></tr></thead>
         <tbody id="deviation-rows">
-          ${deviations.length ? deviations.map(l => `
+          ${deviations.length ? deviations.map(l => {
+            const dev = num(l.planned_pallets) - num(l.actual_pallets);
+            return `
             <tr>
               <td>${esc(fmtDateShort(l.loading_date))}</td>
               <td>${destLabel(l)}</td>
               <td class="small muted">${esc(l.gzi_dn || l.gzi_po_number || '')}</td>
               <td class="num">${nOrDash(l.planned_pallets)}</td>
               <td class="num">${nOrDash(l.actual_pallets)}</td>
-              <td class="num" style="color:var(--red)">${num(l.planned_pallets) - num(l.actual_pallets)}</td>
+              <td class="num" style="color:var(--red)">${dev}</td>
+              <td class="num" style="color:var(--red)">${fmtCans(cansFromPallets(Math.abs(dev)))}</td>
               <td>
                 <input type="text" class="deviation-reason-input" data-load="${l.id}" value="${esc(l.deviation_reason || '')}" placeholder="Add comment…" style="width:220px; padding:5px 7px; border:1px solid var(--border); border-radius:6px;" />
               </td>
-            </tr>`).join('') : `<tr><td colspan="7" class="empty-state">No deviations in this period 🎉</td></tr>`}
+            </tr>`;
+          }).join('') : `<tr><td colspan="8" class="empty-state">No deviations in this period 🎉</td></tr>`}
         </tbody>
-        ${deviations.length ? `<tfoot><tr><td colspan="5">Total deviation</td><td class="num" style="color:var(--red)">${totalDeviation}</td><td></td></tr></tfoot>` : ''}
+        ${deviations.length ? `<tfoot><tr><td colspan="5">Total deviation</td><td class="num" style="color:var(--red)">${totalDeviation}</td><td class="num" style="color:var(--red)">${fmtCans(cansFromPallets(Math.abs(totalDeviation)))}</td><td></td></tr></tfoot>` : ''}
       </table>
     </div>`;
 }
@@ -1135,7 +1139,7 @@ async function renderCustomerPage(content, customerId) {
       <div class="stat-card"><div class="stat-label">Total loads</div><div class="stat-value">${loads.length}</div></div>
       <div class="stat-card"><div class="stat-label">Planned pallets</div><div class="stat-value">${totalPlanned}</div><div class="stat-sub">${fmtCans(totalPlannedCans)} cans</div></div>
       <div class="stat-card"><div class="stat-label">Actual pallets</div><div class="stat-value">${totalActual}</div><div class="stat-sub">${fmtCans(totalActualCans)} cans</div></div>
-      <div class="stat-card"><div class="stat-label">Deviation</div><div class="stat-value">${totalPlanned - totalActual}</div></div>
+      <div class="stat-card"><div class="stat-label">Deviation</div><div class="stat-value">${totalPlanned - totalActual}</div><div class="stat-sub">${fmtCans(cansFromPallets(Math.abs(totalPlanned - totalActual)))} cans</div></div>
     </div>
 
     <div class="table-wrap" style="margin-bottom:24px;">

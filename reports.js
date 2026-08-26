@@ -44,7 +44,7 @@ async function renderOverallReport(content) {
     ${periodFilterHtml(overallState, 'overall')}
     <div class="grid grid-4" style="margin-bottom:20px;">
       <div class="stat-card"><div class="stat-label">Planned / Actual pallets</div><div class="stat-value">${totalPlanned} / ${totalActual}</div><div class="stat-sub">${fmtCans(totalPlannedCans)} / ${fmtCans(totalActualCans)} cans</div></div>
-      <div class="stat-card"><div class="stat-label">Deviation</div><div class="stat-value" style="color:${totalDeviation > 0 ? 'var(--red)' : 'var(--green)'}">${totalDeviation}</div><div class="stat-sub">${deviationLoads.length} loads with a deviation</div></div>
+      <div class="stat-card"><div class="stat-label">Deviation</div><div class="stat-value" style="color:${totalDeviation > 0 ? 'var(--red)' : 'var(--green)'}">${totalDeviation}</div><div class="stat-sub">${fmtCans(cansFromPallets(Math.abs(totalDeviation)))} cans · ${deviationLoads.length} loads</div></div>
       <div class="stat-card"><div class="stat-label">Direct / To warehouse</div><div class="stat-value">${totalDirect} / ${totalToWarehouse}</div><div class="stat-sub">${totalFromWarehouse} shipped warehouse → customer</div></div>
       <div class="stat-card"><div class="stat-label">SOH balance</div><div class="stat-value">${sohBalance}</div><div class="stat-sub">pallets, as of ${fmtDate(to)}</div></div>
     </div>
@@ -59,9 +59,9 @@ async function renderOverallReport(content) {
     <div class="section-title"><h2>By week number</h2></div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Week</th><th class="num">Planned</th><th class="num">Actual</th><th class="num">Deviation</th></tr></thead>
+        <thead><tr><th>Week</th><th class="num">Planned</th><th class="num">Actual</th><th class="num">Deviation</th><th class="num">Cans (M)</th></tr></thead>
         <tbody>
-          ${weekKeys.length ? weekKeys.map(k => { const r = byWeek[k]; return `<tr><td>${esc(k)}</td><td class="num">${r.planned}</td><td class="num">${r.actual}</td><td class="num">${r.planned - r.actual}</td></tr>`; }).join('') : `<tr><td colspan="4" class="empty-state">No data in this period.</td></tr>`}
+          ${weekKeys.length ? weekKeys.map(k => { const r = byWeek[k]; const dev = r.planned - r.actual; return `<tr><td>${esc(k)}</td><td class="num">${r.planned}</td><td class="num">${r.actual}</td><td class="num">${dev}</td><td class="num">${fmtCans(cansFromPallets(Math.abs(dev)))}</td></tr>`; }).join('') : `<tr><td colspan="5" class="empty-state">No data in this period.</td></tr>`}
         </tbody>
       </table>
     </div>
@@ -128,7 +128,7 @@ async function renderDeviationReport(content) {
     <div class="section-title"><h2>All loads — plan date vs loaded date (${loads.length})</h2></div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Plan date</th><th>Loaded date</th><th>Destination</th><th>Supervisor</th><th>Shift</th><th>Day/Night</th><th class="num">Planned</th><th class="num">Actual</th><th class="num">Deviation</th><th>Status</th></tr></thead>
+        <thead><tr><th>Plan date</th><th>Loaded date</th><th>Destination</th><th>Supervisor</th><th>Shift</th><th>Day/Night</th><th class="num">Planned</th><th class="num">Actual</th><th class="num">Deviation</th><th class="num">Cans (M)</th><th>Status</th></tr></thead>
         <tbody>
           ${rows.length ? rows.map(({ l, hasActual, deviation }) => `
             <tr>
@@ -141,8 +141,9 @@ async function renderDeviationReport(content) {
               <td class="num">${nOrDash(l.planned_pallets)}</td>
               <td class="num">${hasActual ? l.actual_pallets : '—'}</td>
               <td class="num" style="${deviation ? 'color:var(--red)' : ''}">${hasActual ? deviation : '—'}</td>
+              <td class="num" style="${deviation ? 'color:var(--red)' : ''}">${hasActual ? fmtCans(cansFromPallets(Math.abs(deviation))) : '—'}</td>
               <td><span class="badge ${STATUS_BADGE[l.status] || 'badge-gray'}">${STATUS_LABELS[l.status] || l.status}</span></td>
-            </tr>`).join('') : `<tr><td colspan="10" class="empty-state">No loads in this period.</td></tr>`}
+            </tr>`).join('') : `<tr><td colspan="11" class="empty-state">No loads in this period.</td></tr>`}
         </tbody>
       </table>
     </div>
@@ -232,17 +233,21 @@ async function renderSupervisorReport(content) {
     ${periodFilterHtml(supervisorReportState, 'supr')}
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Supervisor</th><th>Shift</th><th class="num">Loads</th><th class="num">Planned</th><th class="num">Actual</th><th class="num">Deviation</th></tr></thead>
+        <thead><tr><th>Supervisor</th><th>Shift</th><th class="num">Loads</th><th class="num">Planned</th><th class="num">Actual</th><th class="num">Deviation</th><th class="num">Cans (M)</th></tr></thead>
         <tbody>
-          ${rows.length ? rows.map(r => `
+          ${rows.length ? rows.map(r => {
+            const dev = r.planned - r.actual;
+            return `
             <tr>
               <td>${esc(r.supervisor)}</td>
               <td>${esc(r.shift)}</td>
               <td class="num">${r.count}</td>
               <td class="num">${r.planned}</td>
               <td class="num">${r.actual}</td>
-              <td class="num" style="color:${r.planned - r.actual > 0 ? 'var(--red)' : 'inherit'}">${r.planned - r.actual}</td>
-            </tr>`).join('') : `<tr><td colspan="6" class="empty-state">No loads in this period.</td></tr>`}
+              <td class="num" style="color:${dev > 0 ? 'var(--red)' : 'inherit'}">${dev}</td>
+              <td class="num" style="color:${dev > 0 ? 'var(--red)' : 'inherit'}">${fmtCans(cansFromPallets(Math.abs(dev)))}</td>
+            </tr>`;
+          }).join('') : `<tr><td colspan="7" class="empty-state">No loads in this period.</td></tr>`}
         </tbody>
       </table>
     </div>
