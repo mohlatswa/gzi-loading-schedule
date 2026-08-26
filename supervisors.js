@@ -15,7 +15,10 @@ async function renderSupervisors(content) {
             <tr>
               <td>${esc(s.name)}</td>
               <td>${s.shift ? `<span class="badge badge-blue">Shift ${esc(s.shift)}</span>` : '<span class="muted small">—</span>'}</td>
-              <td><span class="badge ${s.active ? 'badge-green' : 'badge-gray'}">${s.active ? 'Active' : 'Inactive'}</span></td>
+              <td>
+                <span class="badge ${s.active ? 'badge-green' : 'badge-gray'}">${s.active ? 'Active' : 'Inactive'}</span>
+                ${s.status_note ? `<div class="small muted" style="margin-top:3px;">${esc(s.status_note)}</div>` : ''}
+              </td>
               <td class="row-actions">
                 <button class="btn btn-outline btn-sm" data-edit="${s.id}">Edit</button>
                 <button class="btn btn-outline btn-sm" data-delete="${s.id}" style="color:var(--red); border-color:#f3caca;">Delete</button>
@@ -62,6 +65,7 @@ function openSupervisorModal(supervisor) {
               <option value="false" ${supervisor?.active === false ? 'selected' : ''}>Inactive</option>
             </select>
           </div>
+          <div class="field span-2"><label>Status comment <span class="muted">(e.g. on leave, who's standing in)</span></label><textarea id="f-status-note" rows="2">${esc(supervisor?.status_note || '')}</textarea></div>
         </div>
       </form>
     </div>
@@ -77,7 +81,7 @@ function openSupervisorModal(supervisor) {
     const shift = $('#f-shift').value;
     if (!name) { toast('Name is required', 'err'); return; }
     if (!shift) { toast('Select a shift', 'err'); return; }
-    const payload = { name, shift, active: $('#f-active').value === 'true' };
+    const payload = { name, shift, active: $('#f-active').value === 'true', status_note: $('#f-status-note').value.trim() || null };
     try {
       if (isEdit) await DB.updateSupervisor(supervisor.id, payload);
       else await DB.createSupervisor({ ...payload, sort_order: State.supervisors.length });

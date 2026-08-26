@@ -5,6 +5,18 @@ const sb = window.supabase.createClient(
   window.GZI_CONFIG.supabaseAnonKey
 );
 
+if (window.ChartDataLabels) {
+  Chart.register(window.ChartDataLabels);
+  Chart.defaults.set('plugins.datalabels', {
+    display: (ctx) => ctx.dataset.data.length <= 20,
+    anchor: 'end', align: 'top', font: { size: 10, weight: '600' }, color: '#374151',
+    formatter: (v) => (v === 0 ? '' : v)
+  });
+}
+
+const RPM_RATIO = { frames: 1, layercards: 15 };
+const SET_LAYERCARDS = 15;
+
 const STATUS_LABELS = { planned: 'Planned', loaded: 'Loaded', dispatched: 'Dispatched', cancelled: 'Cancelled' };
 const STATUS_BADGE = { planned: 'badge-amber', loaded: 'badge-green', dispatched: 'badge-blue', cancelled: 'badge-gray' };
 
@@ -22,8 +34,9 @@ function parseHash() {
   const parts = h.split('/').filter(Boolean);
   if (parts[0] === 'customer' && parts[1]) return { name: 'customer', id: parts[1] };
   if (parts[0] === 'warehouse' && parts[1]) return { name: 'warehouse', id: parts[1] };
-  const known = ['summary', 'customers', 'warehouses', 'supervisors',
-    'report-overall', 'report-supervisor', 'report-warehouse', 'report-rpm', 'report-stock', 'report-missing'];
+  const known = ['dashboard', 'summary', 'customers', 'warehouses', 'supervisors', 'deleted-loads',
+    'report-overall', 'report-supervisor', 'report-warehouse', 'report-rpm', 'report-stock', 'report-missing',
+    'report-loaded-totals', 'report-deviation'];
   if (known.includes(parts[0])) return { name: parts[0] };
   return { name: 'summary' };
 }
@@ -53,11 +66,11 @@ function fmtDateTime(d) {
   return dt.toLocaleString('en-ZA', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 function fmtTime(t) { return t ? t.slice(0, 5) : ''; }
-function todayISO() { return new Date().toISOString().slice(0, 10); }
-function addDays(iso, n) { const d = new Date(iso + 'T00:00:00'); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); }
-function startOfWeek(iso) { const d = new Date(iso + 'T00:00:00'); const day = (d.getDay() + 6) % 7; d.setDate(d.getDate() - day); return d.toISOString().slice(0, 10); }
+function todayISO() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
+function addDays(iso, n) { const d = new Date(iso + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); }
+function startOfWeek(iso) { const d = new Date(iso + 'T00:00:00Z'); const day = (d.getUTCDay() + 6) % 7; d.setUTCDate(d.getUTCDate() - day); return d.toISOString().slice(0, 10); }
 function startOfMonth(iso) { return iso.slice(0, 7) + '-01'; }
-function endOfMonth(iso) { const d = new Date(iso.slice(0, 7) + '-01T00:00:00'); d.setMonth(d.getMonth() + 1); d.setDate(0); return d.toISOString().slice(0, 10); }
+function endOfMonth(iso) { const d = new Date(iso.slice(0, 7) + '-01T00:00:00Z'); d.setUTCMonth(d.getUTCMonth() + 1); d.setUTCDate(0); return d.toISOString().slice(0, 10); }
 function num(v) { return v === null || v === undefined || v === '' ? 0 : Number(v); }
 function nOrDash(v) { return v === null || v === undefined || v === '' ? '—' : Number(v); }
 function fmtCans(v) { return (v === null || v === undefined || v === '') ? '—' : Number(v).toFixed(2) + 'M'; }
@@ -123,6 +136,67 @@ async function syncSohForLoad(load) {
     }
   } catch (err) { console.error('SOH sync failed', err); }
 }
+
+async function syncRpmForLoad(load) {
+  try {
+    await sb.from('rpm_movements').delete().eq('load_id', load.id);
+    const isDispatched = load.status === 'loaded' || load.status === 'dispatched';
+    const pallets = num(load.actual_pallets);
+    if (isDispatched && pallets > 0) {
+      const stamp = currentUserStamp();
+      await sb.from('rpm_movements').insert({
+        entity_type: load.destination_type,
+        entity_id: load.destination_type === 'warehouse' ? load.warehouse_id : load.customer_id,
+        direction: 'sent',
+        quantity_pallets: pallets,
+        quantity_frames: pallets * RPM_RATIO.frames,
+        quantity_layercards: pallets * RPM_RATIO.layercards,
+        market: load.market || null,
+        movement_date: load.loading_date || todayISO(),
+        load_id: load.id,
+        comments: 'Auto: from load',
+        created_by: stamp.by,
+        created_by_email: stamp.email
+      });
+    }
+  } catch (err) { console.error('RPM sync failed', err); }
+}
+
+async function copyCanvasImage(canvasEl) {
+  try {
+    const blob = await new Promise((resolve, reject) => canvasEl.toBlob(b => b ? resolve(b) : reject(new Error('Could not render image')), 'image/png'));
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+    toast('Chart image copied to clipboard', 'ok');
+  } catch (err) { toast('Copy image failed: ' + err.message, 'err'); }
+}
+
+function computeInternalStockBalances(stock, market) {
+  const items = ['pallet', 'frame', 'layercard'];
+  const result = {};
+  items.forEach(item => {
+    const rows = stock.filter(s => s.item_type === item && (!market || s.market === market));
+    const received = rows.filter(r => r.movement_type === 'receive_unsorted').reduce((s, r) => s + num(r.quantity), 0);
+    const sorted = rows.filter(r => r.movement_type === 'mark_sorted').reduce((s, r) => s + num(r.quantity), 0);
+    const issued = rows.filter(r => r.movement_type === 'issue_ready').reduce((s, r) => s + num(r.quantity), 0);
+    result[item] = { toSort: received - sorted, ready: sorted - issued };
+  });
+  return result;
+}
+
+async function computeRpmDaysCover(market) {
+  const to = todayISO();
+  const from = addDays(to, -30);
+  const [loads, stock] = await Promise.all([DB.getLoads({ dateFrom: from, dateTo: to }), DB.getRpmInternalStock()]);
+  const relevant = loads.filter(l => (l.status === 'loaded' || l.status === 'dispatched') && (!market || l.market === market));
+  const avgDaily = relevant.reduce((s, l) => s + num(l.actual_pallets), 0) / 30;
+  const balances = computeInternalStockBalances(stock, market);
+  const dPallets = avgDaily > 0 ? balances.pallet.ready / avgDaily : null;
+  const dFrames = avgDaily > 0 ? balances.frame.ready / avgDaily : null;
+  const dCards = avgDaily > 0 ? balances.layercard.ready / (avgDaily * SET_LAYERCARDS) : null;
+  const values = [dPallets, dFrames, dCards].filter(v => v !== null);
+  return { avgDaily, balances, dPallets, dFrames, dCards, overall: values.length ? Math.min(...values) : null };
+}
+function fmtDays(v) { return v === null || v === undefined ? '—' : `${v.toFixed(1)}d`; }
 
 function supervisorName(id) { return State.supervisors.find(s => s.id === id)?.name || ''; }
 function supervisorCell(rec) {
@@ -211,8 +285,9 @@ const DB = {
     const { error } = await sb.from('customers').delete().eq('id', id);
     if (error) throw error;
   },
-  async getLoads({ customerId, warehouseId, destinationType, dateFrom, dateTo } = {}) {
+  async getLoads({ customerId, warehouseId, destinationType, dateFrom, dateTo, includeDeleted = false } = {}) {
     let q = sb.from('loads').select('*, customers(name, code)').order('loading_date', { ascending: true });
+    if (!includeDeleted) q = q.is('deleted_at', null);
     if (customerId) q = q.eq('customer_id', customerId);
     if (warehouseId) q = q.eq('warehouse_id', warehouseId);
     if (destinationType) q = q.eq('destination_type', destinationType);
@@ -221,6 +296,15 @@ const DB = {
     const { data, error } = await q;
     if (error) throw error;
     return data;
+  },
+  async getDeletedLoads() {
+    const { data, error } = await sb.from('loads').select('*, customers(name, code)').not('deleted_at', 'is', null).order('deleted_at', { ascending: false });
+    if (error) throw error;
+    return data;
+  },
+  async restoreLoad(id) {
+    const { error } = await sb.from('loads').update({ deleted_at: null, deleted_by: null, deleted_by_email: null }).eq('id', id);
+    if (error) throw error;
   },
   async createLoad(payload) {
     const { data, error } = await sb.from('loads').insert(payload).select().single();
@@ -246,12 +330,22 @@ const DB = {
     if (error) throw error;
     return new Set(data.map(r => r.load_id));
   },
+  async getAttachmentsByCustomer(customerId) {
+    const { data, error } = await sb.from('load_attachments')
+      .select('*, loads!inner(loading_date, gzi_dn, gzi_po_number, customer_id)')
+      .eq('loads.customer_id', customerId)
+      .order('uploaded_at', { ascending: false });
+    if (error) throw error;
+    return data;
+  },
   async uploadAttachment(loadId, file) {
     const path = `${loadId}/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
     const { error: upErr } = await sb.storage.from('load-attachments').upload(path, file);
     if (upErr) throw upErr;
+    const stamp = currentUserStamp();
     const { error } = await sb.from('load_attachments').insert({
-      load_id: loadId, file_name: file.name, storage_path: path, file_size: file.size, content_type: file.type
+      load_id: loadId, file_name: file.name, storage_path: path, file_size: file.size, content_type: file.type,
+      uploaded_by: stamp.by, uploaded_by_email: stamp.email
     });
     if (error) throw error;
   },
@@ -329,6 +423,47 @@ const DB = {
     const { data, error } = await sb.from('load_audit_log').select('*').eq('load_id', loadId).order('changed_at', { ascending: false });
     if (error) throw error;
     return data;
+  },
+
+  /* ---- Load deletion requests ---- */
+  async createDeletionRequest(payload) { const { error } = await sb.from('load_deletion_requests').insert(payload); if (error) throw error; },
+  async getDeletionRequests({ status } = {}) {
+    let q = sb.from('load_deletion_requests').select('*, loads(loading_date, gzi_dn, gzi_po_number, customer_id, customers(name))').order('requested_at', { ascending: false });
+    if (status) q = q.eq('status', status);
+    const { data, error } = await q;
+    if (error) throw error;
+    return data;
+  },
+  async decideDeletionRequest(id, { status, decisionNote, loadId }) {
+    const stamp = currentUserStamp();
+    const { error } = await sb.from('load_deletion_requests').update({
+      status, decision_note: decisionNote || null, decided_by: stamp.by, decided_by_email: stamp.email, decided_at: new Date().toISOString()
+    }).eq('id', id);
+    if (error) throw error;
+    if (status === 'approved') {
+      const { error: delErr } = await sb.from('loads').update({ deleted_at: new Date().toISOString(), deleted_by: stamp.by, deleted_by_email: stamp.email }).eq('id', loadId);
+      if (delErr) throw delErr;
+    }
+  },
+
+  /* ---- RPM internal ("In Warehouse") stock ---- */
+  async getRpmInternalStock() {
+    const { data, error } = await sb.from('rpm_internal_stock').select('*').order('movement_date', { ascending: false });
+    if (error) throw error;
+    return data;
+  },
+  async createRpmInternalStock(payload) { const { error } = await sb.from('rpm_internal_stock').insert(payload); if (error) throw error; },
+
+  /* ---- SOH per-design stock counts ---- */
+  async getSohDesignRecords() {
+    const { data, error } = await sb.from('soh_design_records').select('*').order('production_date', { ascending: false });
+    if (error) throw error;
+    return data;
+  },
+  async createSohDesignRecord(payload) { const { error } = await sb.from('soh_design_records').insert(payload); if (error) throw error; },
+  async resolveSohDesignRecord(id, { resolvedAt, resolutionNotes }) {
+    const { error } = await sb.from('soh_design_records').update({ resolved_at: resolvedAt, resolution_notes: resolutionNotes || null }).eq('id', id);
+    if (error) throw error;
   }
 };
 
@@ -423,8 +558,15 @@ async function fetchWithRetry(fn, retries = 2, delayMs = 700) {
   }
 }
 
+let bootInFlight = null;
 async function boot() {
   if (!State.session) { renderLogin('login'); return; }
+  if (bootInFlight) await bootInFlight;
+  bootInFlight = bootOnce();
+  await bootInFlight;
+  bootInFlight = null;
+}
+async function bootOnce() {
   const results = await Promise.allSettled([
     fetchWithRetry(() => DB.getCustomers()),
     fetchWithRetry(() => DB.getWarehouses()),
@@ -436,7 +578,7 @@ async function boot() {
   if (supervisors.status === 'fulfilled') State.supervisors = supervisors.value; else console.error(supervisors.reason);
   renderShell();
   window.onhashchange = () => { State.route = parseHash(); renderContent(); };
-  renderContent();
+  await renderContent();
 }
 
 function renderShell() {
@@ -450,9 +592,12 @@ function renderShell() {
         <div class="app-name">Loading Schedule</div>
       </div>
       <div class="nav-section">Overview</div>
+      <div class="nav-link" data-nav="dashboard"><span class="dot"></span>Dashboard</div>
       <div class="nav-link" data-nav="summary"><span class="dot"></span>Schedule</div>
       <div class="nav-section">Reports</div>
       <div class="nav-link" data-nav="report-overall"><span class="dot"></span>Overall report</div>
+      <div class="nav-link" data-nav="report-deviation"><span class="dot"></span>Loads deviation</div>
+      <div class="nav-link" data-nav="report-loaded-totals"><span class="dot"></span>Loaded totals</div>
       <div class="nav-link" data-nav="report-supervisor"><span class="dot"></span>Planned vs Supervisor</div>
       <div class="nav-link" data-nav="report-warehouse"><span class="dot"></span>Warehouse report</div>
       <div class="nav-link" data-nav="report-rpm"><span class="dot"></span>RPM report</div>
@@ -463,6 +608,7 @@ function renderShell() {
       <div class="nav-customers-list" id="nav-customer-list"></div>
       <div class="nav-link" data-nav="warehouses"><span class="dot"></span>Warehouses</div>
       <div class="nav-link" data-nav="supervisors"><span class="dot"></span>Supervisors</div>
+      <div class="nav-link" data-nav="deleted-loads"><span class="dot"></span>Deleted loads</div>
     </div>
     <div class="main">
       <div class="topbar">
@@ -515,13 +661,17 @@ async function renderContent() {
   const content = $('#content');
   content.innerHTML = '<div class="center-loading"><span class="spinner" style="border-color: rgba(22,35,63,.25); border-top-color: var(--navy);"></span>&nbsp; Loading…</div>';
   try {
-    if (State.route.name === 'summary') await renderSummary(content);
+    if (State.route.name === 'dashboard') await renderDashboard(content);
+    else if (State.route.name === 'summary') await renderSummary(content);
     else if (State.route.name === 'customers') await renderCustomers(content);
     else if (State.route.name === 'customer') await renderCustomerPage(content, State.route.id);
     else if (State.route.name === 'warehouses') await renderWarehouses(content);
     else if (State.route.name === 'warehouse') await renderWarehousePage(content, State.route.id);
     else if (State.route.name === 'supervisors') await renderSupervisors(content);
+    else if (State.route.name === 'deleted-loads') await renderDeletedLoads(content);
     else if (State.route.name === 'report-overall') await renderOverallReport(content);
+    else if (State.route.name === 'report-deviation') await renderDeviationReport(content);
+    else if (State.route.name === 'report-loaded-totals') await renderLoadedTotalsReport(content);
     else if (State.route.name === 'report-supervisor') await renderSupervisorReport(content);
     else if (State.route.name === 'report-warehouse') await renderWarehouseReport(content);
     else if (State.route.name === 'report-rpm') await renderRpmReport(content);
@@ -564,11 +714,16 @@ async function renderSummary(content) {
 
     <div class="grid grid-2" style="margin-bottom:20px;">
       <div class="card chart-card">
-        <div class="section-title"><h2>Pallets loaded per customer</h2><div class="actions"><button class="btn btn-outline btn-sm" id="copy-customer-chart">Copy</button></div></div>
+        <div class="section-title"><h2>Pallets loaded per customer</h2><div class="actions">
+          <button class="btn btn-outline btn-sm" id="copy-customer-chart">Copy data</button>
+          <button class="btn btn-outline btn-sm" id="copy-customer-chart-img">Copy image</button>
+        </div></div>
         <canvas id="chart-customer"></canvas>
       </div>
       <div class="card chart-card">
-        <div class="section-title"><h2>Deviation by day</h2></div>
+        <div class="section-title"><h2>Deviation by day</h2><div class="actions">
+          <button class="btn btn-outline btn-sm" id="copy-deviation-chart-img">Copy image</button>
+        </div></div>
         <canvas id="chart-deviation"></canvas>
       </div>
     </div>
@@ -591,6 +746,8 @@ async function renderSummary(content) {
     const lines = Object.entries(byCustomer).sort((a, b) => b[1] - a[1]).map(([n, v]) => `${n}\t${v}`);
     copyText(lines.join('\n'));
   });
+  $('#copy-customer-chart-img').addEventListener('click', () => copyCanvasImage($('#chart-customer')));
+  $('#copy-deviation-chart-img').addEventListener('click', () => copyCanvasImage($('#chart-deviation')));
 
   const body = $('#summary-tab-body');
   if (summaryState.tab === 'schedule') body.innerHTML = scheduleTabHtml(loads, attachmentIds, { from, to, totalPlanned, totalActual, totalPlannedCans, totalActualCans });
@@ -631,7 +788,10 @@ function scheduleTabHtml(loads, attachmentIds, totals) {
               <td class="small">${supervisorCell(l)}</td>
               <td class="small muted">${esc(l.tat || '')}</td>
               <td><span class="badge ${STATUS_BADGE[l.status] || 'badge-gray'}">${STATUS_LABELS[l.status] || l.status}</span></td>
-              <td>${(l.status === 'loaded' || l.status === 'dispatched') && !attachmentIds.has(l.id) ? '<span class="badge badge-red">No doc</span>' : ''}</td>
+              <td>
+                ${(l.status === 'loaded' || l.status === 'dispatched') && !attachmentIds.has(l.id) ? '<span class="badge badge-red">No doc</span> ' : ''}
+                <span class="link-btn" data-docs="${l.id}">Docs</span>
+              </td>
               <td class="small muted">${esc(l.updated_by_email || l.created_by_email || '')}<br>${esc(fmtDateTime(l.updated_at || l.created_at))}</td>
             </tr>`).join('') : `<tr><td colspan="15" class="empty-state">No loads scheduled in this period.</td></tr>`}
         </tbody>
@@ -645,7 +805,7 @@ function plannedTabHtml(loads, totals) {
     <div class="section-title"><h2>Planned vs Actioned</h2></div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Date</th><th>Destination</th><th>PO / DN</th><th class="num">Planned</th><th class="num">Actioned</th><th class="num">Cans (M)</th><th class="num">Variance</th><th>Status</th></tr></thead>
+        <thead><tr><th>Date</th><th>Destination</th><th>PO / DN</th><th class="num">Planned</th><th class="num">Actioned</th><th class="num">Cans (M)</th><th class="num">Deviation</th><th>Status</th></tr></thead>
         <tbody>
           ${loads.length ? loads.map(l => {
             const variance = num(l.planned_pallets) - num(l.actual_pallets);
@@ -691,6 +851,7 @@ function deviationsTabHtml(deviations, totalDeviation) {
 }
 
 function bindScheduleTabEvents(root) {
+  root.querySelectorAll('[data-docs]').forEach(el => el.addEventListener('click', () => openAttachmentsModal(el.dataset.docs)));
   root.querySelectorAll('.deviation-reason-input').forEach(inp => {
     inp.addEventListener('change', async () => {
       try {
@@ -827,6 +988,9 @@ function openCustomerModal(customer) {
       active: $('#f-active').value === 'true'
     };
     if (!payload.name) { toast('Customer name is required', 'err'); return; }
+    const stamp = currentUserStamp();
+    if (isEdit) { payload.updated_by = stamp.by; payload.updated_by_email = stamp.email; payload.updated_at = new Date().toISOString(); }
+    else { payload.created_by = stamp.by; payload.created_by_email = stamp.email; }
     try {
       if (isEdit) await DB.updateCustomer(customer.id, payload);
       else await DB.createCustomer({ ...payload, sort_order: State.customers.length });
@@ -845,9 +1009,14 @@ async function renderCustomerPage(content, customerId) {
   if (!customer) { content.innerHTML = `<div class="card">Customer not found. <a href="#/customers">Back to customers</a></div>`; return; }
   setTitle(customer.name, `${customer.despatching_plant || 'GZI'} · Customer loading schedule`);
 
-  const [loads, attachmentIds] = await Promise.all([DB.getLoads({ customerId }), DB.getAllAttachmentLoadIds()]);
+  const [loads, attachmentIds, allDocs, pendingRequests] = await Promise.all([
+    DB.getLoads({ customerId }), DB.getAllAttachmentLoadIds(), DB.getAttachmentsByCustomer(customerId), DB.getDeletionRequests({ status: 'pending' })
+  ]);
   const totalPlanned = loads.reduce((s, l) => s + num(l.planned_pallets), 0);
   const totalActual = loads.reduce((s, l) => s + num(l.actual_pallets), 0);
+  const pendingLoadIds = new Set(pendingRequests.filter(r => r.loads?.customer_id === customerId).map(r => r.load_id));
+  const editedBy = customer.updated_by_email || customer.created_by_email;
+  const editedAt = customer.updated_at || customer.created_at;
 
   content.innerHTML = `
     <div class="card" style="margin-bottom:18px;">
@@ -864,6 +1033,7 @@ async function renderCustomerPage(content, customerId) {
         ${customer.contact_email ? `· ${esc(customer.contact_email)}` : ''}
         ${!customer.contact_person && !customer.contact_phone && !customer.contact_email ? 'No contact details on file.' : ''}
       </div>
+      ${editedBy ? `<div class="small muted" style="margin-top:6px;">Last edited by ${esc(editedBy)} on ${esc(fmtDateTime(editedAt))}</div>` : ''}
     </div>
 
     <div class="grid grid-4" style="margin-bottom:18px;">
@@ -873,7 +1043,7 @@ async function renderCustomerPage(content, customerId) {
       <div class="stat-card"><div class="stat-label">Deviation</div><div class="stat-value">${totalPlanned - totalActual}</div></div>
     </div>
 
-    <div class="table-wrap">
+    <div class="table-wrap" style="margin-bottom:24px;">
       <table>
         <thead><tr>
           <th>Wk</th><th>Loading date</th><th>Transporter</th><th>Reg / Fleet</th><th>PO / DN</th>
@@ -885,9 +1055,28 @@ async function renderCustomerPage(content, customerId) {
         ${loads.length ? `<tfoot><tr><td colspan="6">Totals</td><td class="num">${totalPlanned}</td><td class="num">${totalActual}</td><td colspan="5"></td></tr></tfoot>` : ''}
       </table>
     </div>
+
+    <div class="section-title"><h2>All documents (${allDocs.length})</h2></div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Load date</th><th>PO / DN</th><th>File</th><th>Uploaded by</th><th>Uploaded</th><th></th></tr></thead>
+        <tbody>
+          ${allDocs.length ? allDocs.map(a => `
+            <tr>
+              <td>${esc(fmtDateShort(a.loads?.loading_date))}</td>
+              <td class="small muted">${esc(a.loads?.gzi_dn || a.loads?.gzi_po_number || '')}</td>
+              <td><span class="link-btn" data-view-doc="${a.id}">${esc(a.file_name)}</span></td>
+              <td class="small muted">${esc(a.uploaded_by_email || '')}</td>
+              <td class="small muted">${esc(fmtDateTime(a.uploaded_at))}</td>
+              <td><span class="link-btn" data-docs="${a.load_id}">Open load docs</span></td>
+            </tr>`).join('') : `<tr><td colspan="6" class="empty-state">No documents attached to any load for this customer yet.</td></tr>`}
+        </tbody>
+      </table>
+    </div>
   `;
 
   function rowHtml(l) {
+    const pending = pendingLoadIds.has(l.id);
     return `<tr data-row="${l.id}">
       <td class="small muted">${esc(fmtWeek(l.loading_date))}</td>
       <td>${esc(fmtDateShort(l.loading_date))}</td>
@@ -900,12 +1089,18 @@ async function renderCustomerPage(content, customerId) {
       <td class="num">${fmtCans(l.actual_cans_m ?? l.planned_cans_m)}</td>
       <td class="small">${esc(l.shift || '')}</td>
       <td class="small">${supervisorCell(l)}</td>
-      <td><span class="badge ${STATUS_BADGE[l.status] || 'badge-gray'}">${STATUS_LABELS[l.status] || l.status}</span></td>
-      <td>${(l.status === 'loaded' || l.status === 'dispatched') && !attachmentIds.has(l.id) ? '<span class="badge badge-red">No doc</span>' : '<span class="link-btn" data-docs="' + l.id + '">Docs</span>'}</td>
+      <td>
+        <span class="badge ${STATUS_BADGE[l.status] || 'badge-gray'}">${STATUS_LABELS[l.status] || l.status}</span>
+        ${pending ? '<span class="badge badge-amber" style="margin-left:4px;">Pending deletion</span>' : ''}
+      </td>
+      <td>
+        ${(l.status === 'loaded' || l.status === 'dispatched') && !attachmentIds.has(l.id) ? '<span class="badge badge-red">No doc</span> ' : ''}
+        <span class="link-btn" data-docs="${l.id}">Docs</span>
+      </td>
       <td class="row-actions">
         <button class="btn btn-outline btn-sm" data-edit-load="${l.id}">Edit</button>
         <button class="btn btn-outline btn-sm" data-history="${l.id}">History</button>
-        <button class="btn btn-outline btn-sm" data-delete-load="${l.id}" style="color:var(--red); border-color:#f3caca;">Del</button>
+        <button class="btn btn-outline btn-sm" data-delete-load="${l.id}" style="color:var(--red); border-color:#f3caca;" ${pending ? 'disabled' : ''}>${pending ? 'Pending' : 'Del'}</button>
       </td>
     </tr>`;
   }
@@ -916,12 +1111,40 @@ async function renderCustomerPage(content, customerId) {
     openLoadModal({ customer }, loads.find(l => l.id === el.dataset.editLoad));
   }));
   content.querySelectorAll('[data-history]').forEach(el => el.addEventListener('click', () => openLoadHistoryModal(el.dataset.history)));
-  content.querySelectorAll('[data-delete-load]').forEach(el => el.addEventListener('click', async () => {
-    if (!confirm('Delete this load?')) return;
-    try { await DB.deleteLoad(el.dataset.deleteLoad); toast('Load deleted', 'ok'); renderContent(); }
+  content.querySelectorAll('[data-delete-load]:not([disabled])').forEach(el => el.addEventListener('click', () => openDeletionRequestModal(el.dataset.deleteLoad)));
+  content.querySelectorAll('[data-docs]').forEach(el => el.addEventListener('click', () => openAttachmentsModal(el.dataset.docs)));
+  content.querySelectorAll('[data-view-doc]').forEach(el => el.addEventListener('click', async () => {
+    const att = allDocs.find(a => a.id === el.dataset.viewDoc);
+    try { const url = await DB.signedUrl(att.storage_path); window.open(url, '_blank'); }
     catch (err) { toast(err.message, 'err'); }
   }));
-  content.querySelectorAll('[data-docs]').forEach(el => el.addEventListener('click', () => openAttachmentsModal(el.dataset.docs)));
+}
+
+function openDeletionRequestModal(loadId) {
+  openModal(`
+    <div class="modal-header"><h3>Request deletion</h3><button class="modal-close" id="modal-close">&times;</button></div>
+    <div class="modal-body">
+      <p class="muted small">This load won't be deleted immediately — another signed-in user will need to authorise it. It will show as "Pending deletion" until then.</p>
+      <div class="field"><label>Reason for deletion *</label><textarea id="f-reason" rows="3" placeholder="Why should this load be deleted?"></textarea></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" id="modal-cancel">Cancel</button>
+      <button class="btn btn-primary" id="modal-save">Submit for authorisation</button>
+    </div>
+  `);
+  $('#modal-close').addEventListener('click', closeModal);
+  $('#modal-cancel').addEventListener('click', closeModal);
+  $('#modal-save').addEventListener('click', async () => {
+    const reason = $('#f-reason').value.trim();
+    if (!reason) { toast('A reason is required', 'err'); return; }
+    const stamp = currentUserStamp();
+    try {
+      await DB.createDeletionRequest({ load_id: loadId, reason, requested_by: stamp.by, requested_by_email: stamp.email });
+      closeModal();
+      toast('Deletion request submitted for authorisation', 'ok');
+      renderContent();
+    } catch (err) { toast(err.message, 'err'); }
+  });
 }
 
 /* ================= LOAD MODAL (shared: customer-destined or warehouse-destined) ================= */
@@ -961,9 +1184,24 @@ function openLoadModal(ctx, load) {
               ${State.warehouses.map(w => `<option value="${w.id}" ${selectedWarehouseId === w.id ? 'selected' : ''}>${esc(w.name)}</option>`).join('')}
             </select>
           </div>
-          <div class="field"><label>Loading date</label><input type="date" id="f-loading-date" value="${v('loading_date')}" /></div>
+          <div class="field"><label>Loading date <span class="muted">(plan date)</span></label><input type="date" id="f-loading-date" value="${v('loading_date')}" /></div>
+          <div class="field"><label>Actual loaded date</label><input type="date" id="f-actual-loaded-date" value="${v('actual_loaded_date')}" /></div>
           <div class="field"><label>Offloading date</label><input type="date" id="f-offloading-date" value="${v('offloading_date')}" /></div>
           <div class="field"><label>Time slot</label><input id="f-time-slot" value="${v('time_slot')}" placeholder="e.g. 07:00-16:00" /></div>
+          <div class="field"><label>Market</label>
+            <select id="f-market">
+              <option value="">—</option>
+              <option value="local" ${load?.market === 'local' ? 'selected' : ''}>Local</option>
+              <option value="export" ${load?.market === 'export' ? 'selected' : ''}>Export</option>
+            </select>
+          </div>
+          <div class="field"><label>Day / Night</label>
+            <select id="f-day-night">
+              <option value="">—</option>
+              <option value="day" ${load?.day_night === 'day' ? 'selected' : ''}>Day shift</option>
+              <option value="night" ${load?.day_night === 'night' ? 'selected' : ''}>Night shift</option>
+            </select>
+          </div>
           <div class="field"><label>Despatching plant</label><input id="f-plant" value="${v('despatching_plant', ctx.customer?.despatching_plant || 'GZI')}" /></div>
           <div class="field"><label>Transporter</label><input id="f-transporter" value="${v('transporter')}" /></div>
           <div class="field"><label>Fleet / driver</label><input id="f-fleet" value="${v('fleet_details')}" /></div>
@@ -1033,13 +1271,20 @@ function openLoadModal(ctx, load) {
     if (destType === 'warehouse' && !warehouse_id) { toast('Select a warehouse', 'err'); return; }
 
     const arrival = g('#f-arrival'), depart = g('#f-depart');
+    const status = $('#f-status').value;
+    const loadingDate = g('#f-loading-date');
+    let actualLoadedDate = g('#f-actual-loaded-date');
+    if (!actualLoadedDate && (status === 'loaded' || status === 'dispatched')) actualLoadedDate = loadingDate;
     const stamp = currentUserStamp();
     const payload = {
       destination_type: destType,
       customer_id, warehouse_id,
-      loading_date: g('#f-loading-date'),
+      loading_date: loadingDate,
+      actual_loaded_date: actualLoadedDate,
       offloading_date: g('#f-offloading-date'),
       time_slot: g('#f-time-slot'),
+      market: g('#f-market'),
+      day_night: g('#f-day-night'),
       despatching_plant: g('#f-plant'),
       transporter: g('#f-transporter'),
       fleet_details: g('#f-fleet'),
@@ -1056,7 +1301,7 @@ function openLoadModal(ctx, load) {
       supervisor_id: g('#f-supervisor'),
       shift: g('#f-shift'),
       supervisor_note: g('#f-supervisor-note'),
-      status: $('#f-status').value,
+      status,
       arrival_time: arrival,
       loading_bay_time: g('#f-bay'),
       depart_time: depart,
@@ -1073,6 +1318,7 @@ function openLoadModal(ctx, load) {
       else saved = await DB.createLoad(payload);
       await logLoadAudit(saved.id, isEdit ? 'update' : 'insert', payload);
       await syncSohForLoad(saved);
+      await syncRpmForLoad(saved);
       closeModal();
       toast(isEdit ? 'Load updated' : 'Load added', 'ok');
       renderContent();

@@ -187,6 +187,20 @@ function openWarehouseDispatchModal(warehouse, dispatch) {
             </select>
           </div>
           <div class="field"><label>Dispatch date</label><input type="date" id="f-date" value="${v('dispatch_date')}" /></div>
+          <div class="field"><label>Market</label>
+            <select id="f-market">
+              <option value="">—</option>
+              <option value="local" ${dispatch?.market === 'local' ? 'selected' : ''}>Local</option>
+              <option value="export" ${dispatch?.market === 'export' ? 'selected' : ''}>Export</option>
+            </select>
+          </div>
+          <div class="field"><label>Day / Night</label>
+            <select id="f-day-night">
+              <option value="">—</option>
+              <option value="day" ${dispatch?.day_night === 'day' ? 'selected' : ''}>Day shift</option>
+              <option value="night" ${dispatch?.day_night === 'night' ? 'selected' : ''}>Night shift</option>
+            </select>
+          </div>
           <div class="field"><label>Transporter</label><input id="f-transporter" value="${v('transporter')}" /></div>
           <div class="field"><label>Reg number</label><input id="f-reg" value="${v('reg_number')}" /></div>
           <div class="field"><label>Planned pallets</label><input type="number" step="0.01" id="f-planned" value="${v('planned_pallets')}" /></div>
@@ -235,6 +249,8 @@ function openWarehouseDispatchModal(warehouse, dispatch) {
       warehouse_id: warehouse.id,
       customer_id,
       dispatch_date: g('#f-date'),
+      market: g('#f-market'),
+      day_night: g('#f-day-night'),
       transporter: g('#f-transporter'),
       reg_number: g('#f-reg'),
       planned_pallets: g('#f-planned'),
