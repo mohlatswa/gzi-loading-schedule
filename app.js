@@ -1107,6 +1107,8 @@ async function renderCustomerPage(content, customerId) {
   ]);
   const totalPlanned = loads.reduce((s, l) => s + num(l.planned_pallets), 0);
   const totalActual = loads.reduce((s, l) => s + num(l.actual_pallets), 0);
+  const totalPlannedCans = loads.reduce((s, l) => s + (cansFromPallets(l.planned_pallets) || 0), 0);
+  const totalActualCans = loads.reduce((s, l) => s + (cansFromPallets(l.actual_pallets) || 0), 0);
   const pendingLoadIds = new Set(pendingRequests.filter(r => r.loads?.customer_id === customerId).map(r => r.load_id));
   const editedBy = customer.updated_by_email || customer.created_by_email;
   const editedAt = customer.updated_at || customer.created_at;
@@ -1131,8 +1133,8 @@ async function renderCustomerPage(content, customerId) {
 
     <div class="grid grid-4" style="margin-bottom:18px;">
       <div class="stat-card"><div class="stat-label">Total loads</div><div class="stat-value">${loads.length}</div></div>
-      <div class="stat-card"><div class="stat-label">Planned pallets</div><div class="stat-value">${totalPlanned}</div></div>
-      <div class="stat-card"><div class="stat-label">Actual pallets</div><div class="stat-value">${totalActual}</div></div>
+      <div class="stat-card"><div class="stat-label">Planned pallets</div><div class="stat-value">${totalPlanned}</div><div class="stat-sub">${fmtCans(totalPlannedCans)} cans</div></div>
+      <div class="stat-card"><div class="stat-label">Actual pallets</div><div class="stat-value">${totalActual}</div><div class="stat-sub">${fmtCans(totalActualCans)} cans</div></div>
       <div class="stat-card"><div class="stat-label">Deviation</div><div class="stat-value">${totalPlanned - totalActual}</div></div>
     </div>
 
@@ -1145,7 +1147,7 @@ async function renderCustomerPage(content, customerId) {
         <tbody id="load-rows">
           ${loads.length ? loads.map(rowHtml).join('') : `<tr><td colspan="15" class="empty-state">No loads yet for this customer. Click "New load" to add one.</td></tr>`}
         </tbody>
-        ${loads.length ? `<tfoot><tr><td colspan="6">Totals</td><td class="num">${totalPlanned}</td><td class="num">${totalActual}</td><td colspan="6"></td></tr></tfoot>` : ''}
+        ${loads.length ? `<tfoot><tr><td colspan="6">Totals</td><td class="num">${totalPlanned}</td><td class="num">${totalActual}</td><td class="num">${fmtCans(totalActualCans)} (${fmtCans(totalPlannedCans)})</td><td colspan="5"></td></tr></tfoot>` : ''}
       </table>
     </div>
 
