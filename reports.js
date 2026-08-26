@@ -15,8 +15,8 @@ async function renderOverallReport(content) {
 
   const totalPlanned = loads.reduce((s, l) => s + num(l.planned_pallets), 0);
   const totalActual = loads.reduce((s, l) => s + num(l.actual_pallets), 0);
-  const totalPlannedCans = loads.reduce((s, l) => s + num(l.planned_cans_m), 0);
-  const totalActualCans = loads.reduce((s, l) => s + num(l.actual_cans_m), 0);
+  const totalPlannedCans = loads.reduce((s, l) => s + (cansFromPallets(l.planned_pallets) || 0), 0);
+  const totalActualCans = loads.reduce((s, l) => s + (cansFromPallets(l.actual_pallets) || 0), 0);
   const deviationLoads = loads.filter(l => (l.status === 'loaded' || l.status === 'dispatched') && num(l.actual_pallets) !== num(l.planned_pallets));
   const totalDeviation = deviationLoads.reduce((s, l) => s + (num(l.planned_pallets) - num(l.actual_pallets)), 0);
   const totalDirect = loads.filter(l => l.destination_type === 'customer').reduce((s, l) => s + num(l.actual_pallets), 0);
@@ -182,7 +182,7 @@ async function renderLoadedTotalsReport(content) {
     groups[key] = groups[key] || { count: 0, pallets: 0, cans: 0 };
     groups[key].count += 1;
     groups[key].pallets += num(l.actual_pallets);
-    groups[key].cans += num(l.actual_cans_m);
+    groups[key].cans += cansFromPallets(l.actual_pallets) || 0;
   });
   const entries = Object.entries(groups).sort((a, b) => a[0] < b[0] ? -1 : 1);
   const groupLabel = { supervisor: 'Supervisor', day: 'Day', week: 'Week', month: 'Month' }[loadedTotalsGroupBy];

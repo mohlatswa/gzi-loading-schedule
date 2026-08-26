@@ -80,6 +80,12 @@ function num(v) { return v === null || v === undefined || v === '' ? 0 : Number(
 function nOrDash(v) { return v === null || v === undefined || v === '' ? '—' : Number(v); }
 function fmtCans(v) { return (v === null || v === undefined || v === '') ? '—' : Number(v).toFixed(2) + 'M'; }
 
+const CANS_PER_PALLET = 5446;
+function cansFromPallets(pallets) { return (pallets === null || pallets === undefined || pallets === '') ? null : Number(pallets) * CANS_PER_PALLET / 1000000; }
+function fmtCansCalc(pallets) { const c = cansFromPallets(pallets); return c === null ? '—' : c.toFixed(2) + 'M'; }
+function fmtCansPair(plannedPallets, actualPallets) { return `${fmtCansCalc(actualPallets)} (${fmtCansCalc(plannedPallets)})`; }
+function dayNightLabel(v) { return v === 'day' ? 'Day' : v === 'night' ? 'Night' : ''; }
+
 function isoWeek(dateStr) {
   if (!dateStr) return null;
   const d = new Date(dateStr + 'T00:00:00');
@@ -730,8 +736,8 @@ async function renderSummary(content) {
 
   const totalPlanned = loads.reduce((s, l) => s + num(l.planned_pallets), 0);
   const totalActual = loads.reduce((s, l) => s + num(l.actual_pallets), 0);
-  const totalPlannedCans = loads.reduce((s, l) => s + num(l.planned_cans_m), 0);
-  const totalActualCans = loads.reduce((s, l) => s + num(l.actual_cans_m), 0);
+  const totalPlannedCans = loads.reduce((s, l) => s + (cansFromPallets(l.planned_pallets) || 0), 0);
+  const totalActualCans = loads.reduce((s, l) => s + (cansFromPallets(l.actual_pallets) || 0), 0);
   const deviations = loads.filter(l => (l.status === 'loaded' || l.status === 'dispatched') && num(l.actual_pallets) !== num(l.planned_pallets));
   const totalDeviation = deviations.reduce((s, l) => s + (num(l.planned_pallets) - num(l.actual_pallets)), 0);
   const loadedCount = loads.filter(l => l.status === 'loaded' || l.status === 'dispatched').length;
@@ -804,7 +810,7 @@ function scheduleTabHtml(loads, attachmentIds, totals) {
       <table>
         <thead><tr>
           <th>Wk</th><th>Date</th><th>Destination</th><th>Transporter</th><th>PO / DN</th><th>Design</th>
-          <th class="num">Planned</th><th class="num">Actual</th><th class="num">Cans (M)</th><th>Shift</th><th>Supervisor</th><th>TAT</th><th>Status</th><th>Docs</th><th>Last edit</th>
+          <th class="num">Planned</th><th class="num">Actual</th><th class="num">Cans (M) Actual (Planned)</th><th>Shift</th><th>Day/Night</th><th>Supervisor</th><th>TAT</th><th>Status</th><th>Docs</th><th>Last edit</th>
         </tr></thead>
         <tbody>
           ${loads.length ? loads.map(l => `
@@ -817,8 +823,9 @@ function scheduleTabHtml(loads, attachmentIds, totals) {
               <td>${esc(l.design || '')}</td>
               <td class="num">${nOrDash(l.planned_pallets)}</td>
               <td class="num">${nOrDash(l.actual_pallets)}</td>
-              <td class="num">${fmtCans(l.actual_cans_m ?? l.planned_cans_m)}</td>
+              <td class="num">${fmtCansPair(l.planned_pallets, l.actual_pallets)}</td>
               <td class="small">${esc(l.shift || '')}</td>
+              <td class="small">${esc(dayNightLabel(l.day_night))}</td>
               <td class="small">${supervisorCell(l)}</td>
               <td class="small muted">${esc(l.tat || '')}</td>
               <td><span class="badge ${STATUS_BADGE[l.status] || 'badge-gray'}">${STATUS_LABELS[l.status] || l.status}</span></td>
@@ -827,9 +834,9 @@ function scheduleTabHtml(loads, attachmentIds, totals) {
                 <span class="link-btn" data-docs="${l.id}">Docs</span>
               </td>
               <td class="small muted">${esc(l.updated_by_email || l.created_by_email || '')}<br>${esc(fmtDateTime(l.updated_at || l.created_at))}</td>
-            </tr>`).join('') : `<tr><td colspan="15" class="empty-state">No loads scheduled in this period.</td></tr>`}
+            </tr>`).join('') : `<tr><td colspan="16" class="empty-state">No loads scheduled in this period.</td></tr>`}
         </tbody>
-        ${loads.length ? `<tfoot><tr><td colspan="6">Totals</td><td class="num">${totals.totalPlanned}</td><td class="num">${totals.totalActual}</td><td class="num">${fmtCans(totals.totalActualCans)}</td><td colspan="6"></td></tr></tfoot>` : ''}
+        ${loads.length ? `<tfoot><tr><td colspan="6">Totals</td><td class="num">${totals.totalPlanned}</td><td class="num">${totals.totalActual}</td><td class="num">${fmtCans(totals.totalActualCans)} (${fmtCans(totals.totalPlannedCans)})</td><td colspan="7"></td></tr></tfoot>` : ''}
       </table>
     </div>`;
 }
@@ -839,7 +846,7 @@ function plannedTabHtml(loads, totals) {
     <div class="section-title"><h2>Planned vs Actioned</h2></div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Date</th><th>Destination</th><th>PO / DN</th><th class="num">Planned</th><th class="num">Actioned</th><th class="num">Cans (M)</th><th class="num">Deviation</th><th>Status</th></tr></thead>
+        <thead><tr><th>Date</th><th>Destination</th><th>PO / DN</th><th class="num">Planned</th><th class="num">Actioned</th><th class="num">Cans (M) Actual (Planned)</th><th>Day/Night</th><th class="num">Deviation</th><th>Status</th></tr></thead>
         <tbody>
           ${loads.length ? loads.map(l => {
             const variance = num(l.planned_pallets) - num(l.actual_pallets);
@@ -849,11 +856,12 @@ function plannedTabHtml(loads, totals) {
               <td class="small muted">${esc(l.gzi_dn || l.gzi_po_number || '')}</td>
               <td class="num">${nOrDash(l.planned_pallets)}</td>
               <td class="num">${nOrDash(l.actual_pallets)}</td>
-              <td class="num">${fmtCans(l.actual_cans_m ?? l.planned_cans_m)}</td>
+              <td class="num">${fmtCansPair(l.planned_pallets, l.actual_pallets)}</td>
+              <td class="small">${esc(dayNightLabel(l.day_night))}</td>
               <td class="num" style="color:${variance > 0 ? 'var(--red)' : variance < 0 ? 'var(--blue)' : 'inherit'}">${l.status === 'planned' ? '—' : variance}</td>
               <td><span class="badge ${STATUS_BADGE[l.status] || 'badge-gray'}">${STATUS_LABELS[l.status] || l.status}</span></td>
             </tr>`;
-          }).join('') : `<tr><td colspan="8" class="empty-state">No data.</td></tr>`}
+          }).join('') : `<tr><td colspan="9" class="empty-state">No data.</td></tr>`}
         </tbody>
       </table>
     </div>`;
@@ -1081,12 +1089,12 @@ async function renderCustomerPage(content, customerId) {
       <table>
         <thead><tr>
           <th>Wk</th><th>Loading date</th><th>Transporter</th><th>Reg / Fleet</th><th>PO / DN</th>
-          <th>Design</th><th class="num">Planned</th><th class="num">Actual</th><th class="num">Cans (M)</th><th>Shift</th><th>Supervisor</th><th>Status</th><th>Docs</th><th></th>
+          <th>Design</th><th class="num">Planned</th><th class="num">Actual</th><th class="num">Cans (M) Actual (Planned)</th><th>Shift</th><th>Day/Night</th><th>Supervisor</th><th>Status</th><th>Docs</th><th></th>
         </tr></thead>
         <tbody id="load-rows">
-          ${loads.length ? loads.map(rowHtml).join('') : `<tr><td colspan="14" class="empty-state">No loads yet for this customer. Click "New load" to add one.</td></tr>`}
+          ${loads.length ? loads.map(rowHtml).join('') : `<tr><td colspan="15" class="empty-state">No loads yet for this customer. Click "New load" to add one.</td></tr>`}
         </tbody>
-        ${loads.length ? `<tfoot><tr><td colspan="6">Totals</td><td class="num">${totalPlanned}</td><td class="num">${totalActual}</td><td colspan="5"></td></tr></tfoot>` : ''}
+        ${loads.length ? `<tfoot><tr><td colspan="6">Totals</td><td class="num">${totalPlanned}</td><td class="num">${totalActual}</td><td colspan="6"></td></tr></tfoot>` : ''}
       </table>
     </div>
 
@@ -1120,8 +1128,9 @@ async function renderCustomerPage(content, customerId) {
       <td>${esc(l.design || '')}</td>
       <td class="num">${nOrDash(l.planned_pallets)}</td>
       <td class="num">${nOrDash(l.actual_pallets)}</td>
-      <td class="num">${fmtCans(l.actual_cans_m ?? l.planned_cans_m)}</td>
+      <td class="num">${fmtCansPair(l.planned_pallets, l.actual_pallets)}</td>
       <td class="small">${esc(l.shift || '')}</td>
+      <td class="small">${esc(dayNightLabel(l.day_night))}</td>
       <td class="small">${supervisorCell(l)}</td>
       <td>
         <span class="badge ${STATUS_BADGE[l.status] || 'badge-gray'}">${STATUS_LABELS[l.status] || l.status}</span>
@@ -1247,8 +1256,9 @@ function openLoadModal(ctx, load) {
           <div class="field"><label>Design / Description</label><input id="f-design" value="${v('design')}" /></div>
           <div class="field"><label>Planned pallets</label><input type="number" step="0.01" id="f-planned" value="${v('planned_pallets')}" /></div>
           <div class="field"><label>Actual pallets</label><input type="number" step="0.01" id="f-actual" value="${v('actual_pallets')}" /></div>
-          <div class="field"><label>Planned cans (M)</label><input type="number" step="0.01" id="f-planned-cans" value="${v('planned_cans_m')}" /></div>
-          <div class="field"><label>Actual cans (M)</label><input type="number" step="0.01" id="f-actual-cans" value="${v('actual_cans_m')}" /></div>
+          <div class="field span-2"><label>Cans (M) <span class="muted">(auto: pallets × ${CANS_PER_PALLET} ÷ 1,000,000)</span></label>
+            <div id="cans-preview" class="small muted" style="padding:9px 0;">Actual ${fmtCansCalc(load?.actual_pallets)} (Planned ${fmtCansCalc(load?.planned_pallets)})</div>
+          </div>
           <div class="field"><label>Supervisor</label>
             <select id="f-supervisor">
               <option value="">—</option>
@@ -1297,6 +1307,12 @@ function openLoadModal(ctx, load) {
     if (shift) $('#f-shift').value = 'Shift ' + shift;
   });
 
+  function updateCansPreview() {
+    $('#cans-preview').textContent = `Actual ${fmtCansCalc($('#f-actual').value)} (Planned ${fmtCansCalc($('#f-planned').value)})`;
+  }
+  $('#f-planned').addEventListener('input', updateCansPreview);
+  $('#f-actual').addEventListener('input', updateCansPreview);
+
   $('#modal-save').addEventListener('click', async () => {
     const g = (id) => { const x = $(id).value; return x === '' ? null : x; };
     const customer_id = destType === 'customer' ? g('#f-dest-customer') : null;
@@ -1330,8 +1346,8 @@ function openLoadModal(ctx, load) {
       design: g('#f-design'),
       planned_pallets: g('#f-planned'),
       actual_pallets: g('#f-actual'),
-      planned_cans_m: g('#f-planned-cans'),
-      actual_cans_m: g('#f-actual-cans'),
+      planned_cans_m: cansFromPallets(g('#f-planned')),
+      actual_cans_m: cansFromPallets(g('#f-actual')),
       supervisor_id: g('#f-supervisor'),
       shift: g('#f-shift'),
       supervisor_note: g('#f-supervisor-note'),

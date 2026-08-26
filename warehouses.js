@@ -119,7 +119,7 @@ async function renderWarehousePage(content, warehouseId) {
     <div class="section-title"><h2>Received from factory</h2></div>
     <div class="table-wrap" style="margin-bottom:24px;">
       <table>
-        <thead><tr><th>Wk</th><th>Date</th><th>Transporter</th><th>PO / DN</th><th class="num">Planned</th><th class="num">Actual</th><th class="num">Cans (M)</th><th>Status</th><th></th></tr></thead>
+        <thead><tr><th>Wk</th><th>Date</th><th>Transporter</th><th>PO / DN</th><th class="num">Planned</th><th class="num">Actual</th><th class="num">Cans (M) Actual (Planned)</th><th>Day/Night</th><th>Status</th><th></th></tr></thead>
         <tbody>
           ${received.length ? received.map(l => `
             <tr>
@@ -129,19 +129,20 @@ async function renderWarehousePage(content, warehouseId) {
               <td class="small muted">${esc(l.gzi_dn || l.gzi_po_number || '')}</td>
               <td class="num">${nOrDash(l.planned_pallets)}</td>
               <td class="num">${nOrDash(l.actual_pallets)}</td>
-              <td class="num">${fmtCans(l.actual_cans_m ?? l.planned_cans_m)}</td>
+              <td class="num">${fmtCansPair(l.planned_pallets, l.actual_pallets)}</td>
+              <td class="small">${esc(dayNightLabel(l.day_night))}</td>
               <td><span class="badge ${STATUS_BADGE[l.status] || 'badge-gray'}">${STATUS_LABELS[l.status] || l.status}</span></td>
               <td><button class="btn btn-outline btn-sm" data-edit-load="${l.id}">Edit</button></td>
-            </tr>`).join('') : `<tr><td colspan="9" class="empty-state">No loads received yet.</td></tr>`}
+            </tr>`).join('') : `<tr><td colspan="10" class="empty-state">No loads received yet.</td></tr>`}
         </tbody>
-        ${received.length ? `<tfoot><tr><td colspan="4">Totals</td><td class="num">${received.reduce((s, l) => s + num(l.planned_pallets), 0)}</td><td class="num">${totalReceived}</td><td colspan="3"></td></tr></tfoot>` : ''}
+        ${received.length ? `<tfoot><tr><td colspan="4">Totals</td><td class="num">${received.reduce((s, l) => s + num(l.planned_pallets), 0)}</td><td class="num">${totalReceived}</td><td colspan="4"></td></tr></tfoot>` : ''}
       </table>
     </div>
 
     <div class="section-title"><h2>Dispatched to customers</h2></div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Date</th><th>Customer</th><th>Transporter</th><th class="num">Planned</th><th class="num">Actual</th><th class="num">Cans (M)</th><th>Shift / Sup.</th><th>Status</th><th></th></tr></thead>
+        <thead><tr><th>Date</th><th>Customer</th><th>Transporter</th><th class="num">Planned</th><th class="num">Actual</th><th class="num">Cans (M) Actual (Planned)</th><th>Day/Night</th><th>Shift / Sup.</th><th>Status</th><th></th></tr></thead>
         <tbody>
           ${dispatches.length ? dispatches.map(d => `
             <tr>
@@ -150,13 +151,14 @@ async function renderWarehousePage(content, warehouseId) {
               <td>${esc(d.transporter || '')}</td>
               <td class="num">${nOrDash(d.planned_pallets)}</td>
               <td class="num">${nOrDash(d.actual_pallets)}</td>
-              <td class="num">${fmtCans(d.actual_cans_m ?? d.planned_cans_m)}</td>
+              <td class="num">${fmtCansPair(d.planned_pallets, d.actual_pallets)}</td>
+              <td class="small">${esc(dayNightLabel(d.day_night))}</td>
               <td class="small">${esc(d.shift || '')} ${d.supervisor_id ? '· ' + supervisorCell(d) : ''}</td>
               <td><span class="badge ${STATUS_BADGE[d.status] || 'badge-gray'}">${STATUS_LABELS[d.status] || d.status}</span></td>
               <td><button class="btn btn-outline btn-sm" data-edit-dispatch="${d.id}">Edit</button></td>
-            </tr>`).join('') : `<tr><td colspan="9" class="empty-state">No dispatches recorded yet.</td></tr>`}
+            </tr>`).join('') : `<tr><td colspan="10" class="empty-state">No dispatches recorded yet.</td></tr>`}
         </tbody>
-        ${dispatches.length ? `<tfoot><tr><td colspan="3">Totals</td><td class="num">${dispatches.reduce((s, d) => s + num(d.planned_pallets), 0)}</td><td class="num">${totalDispatched}</td><td colspan="4"></td></tr></tfoot>` : ''}
+        ${dispatches.length ? `<tfoot><tr><td colspan="3">Totals</td><td class="num">${dispatches.reduce((s, d) => s + num(d.planned_pallets), 0)}</td><td class="num">${totalDispatched}</td><td colspan="5"></td></tr></tfoot>` : ''}
       </table>
     </div>
   `;
@@ -205,8 +207,9 @@ function openWarehouseDispatchModal(warehouse, dispatch) {
           <div class="field"><label>Reg number</label><input id="f-reg" value="${v('reg_number')}" /></div>
           <div class="field"><label>Planned pallets</label><input type="number" step="0.01" id="f-planned" value="${v('planned_pallets')}" /></div>
           <div class="field"><label>Actual pallets</label><input type="number" step="0.01" id="f-actual" value="${v('actual_pallets')}" /></div>
-          <div class="field"><label>Planned cans (M)</label><input type="number" step="0.01" id="f-planned-cans" value="${v('planned_cans_m')}" /></div>
-          <div class="field"><label>Actual cans (M)</label><input type="number" step="0.01" id="f-actual-cans" value="${v('actual_cans_m')}" /></div>
+          <div class="field span-2"><label>Cans (M) <span class="muted">(auto: pallets × ${CANS_PER_PALLET} ÷ 1,000,000)</span></label>
+            <div id="cans-preview" class="small muted" style="padding:9px 0;">Actual ${fmtCansCalc(dispatch?.actual_pallets)} (Planned ${fmtCansCalc(dispatch?.planned_pallets)})</div>
+          </div>
           <div class="field"><label>Supervisor</label>
             <select id="f-supervisor">
               <option value="">—</option>
@@ -240,6 +243,11 @@ function openWarehouseDispatchModal(warehouse, dispatch) {
     const shift = e.target.selectedOptions[0]?.dataset.shift;
     if (shift) $('#f-shift').value = 'Shift ' + shift;
   });
+  function updateCansPreview() {
+    $('#cans-preview').textContent = `Actual ${fmtCansCalc($('#f-actual').value)} (Planned ${fmtCansCalc($('#f-planned').value)})`;
+  }
+  $('#f-planned').addEventListener('input', updateCansPreview);
+  $('#f-actual').addEventListener('input', updateCansPreview);
   $('#modal-save').addEventListener('click', async () => {
     const g = (id) => { const x = $(id).value; return x === '' ? null : x; };
     const customer_id = g('#f-customer');
@@ -255,8 +263,8 @@ function openWarehouseDispatchModal(warehouse, dispatch) {
       reg_number: g('#f-reg'),
       planned_pallets: g('#f-planned'),
       actual_pallets: g('#f-actual'),
-      planned_cans_m: g('#f-planned-cans'),
-      actual_cans_m: g('#f-actual-cans'),
+      planned_cans_m: cansFromPallets(g('#f-planned')),
+      actual_cans_m: cansFromPallets(g('#f-actual')),
       supervisor_id: g('#f-supervisor'),
       shift: g('#f-shift'),
       supervisor_note: g('#f-supervisor-note'),
