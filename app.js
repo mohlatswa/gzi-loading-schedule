@@ -19,22 +19,27 @@ const SET_LAYERCARDS = 15;
 
 const STATUS_LABELS = { planned: 'Planned', loaded: 'Loaded', dispatched: 'Dispatched', cancelled: 'Cancelled' };
 const STATUS_BADGE = { planned: 'badge-amber', loaded: 'badge-green', dispatched: 'badge-blue', cancelled: 'badge-gray' };
+const ROLE_LABELS = { manager: 'Manager', supervisor: 'Supervisor', warehouse_admin: 'Warehouse Admin' };
+function roleLabel(r) { return ROLE_LABELS[r] || r; }
 
 const State = {
   session: null,
   customers: [],
   warehouses: [],
   supervisors: [],
+  myRole: null,
   route: parseHash(),
   charts: {}
 };
+function canAuthoriseDeletions() { return State.myRole === 'manager' || State.myRole === 'supervisor'; }
+function isManager() { return State.myRole === 'manager'; }
 
 function parseHash() {
   const h = location.hash.replace(/^#\/?/, '');
   const parts = h.split('/').filter(Boolean);
   if (parts[0] === 'customer' && parts[1]) return { name: 'customer', id: parts[1] };
   if (parts[0] === 'warehouse' && parts[1]) return { name: 'warehouse', id: parts[1] };
-  const known = ['dashboard', 'summary', 'customers', 'warehouses', 'supervisors', 'deleted-loads',
+  const known = ['dashboard', 'summary', 'customers', 'warehouses', 'supervisors', 'deleted-loads', 'users',
     'report-overall', 'report-supervisor', 'report-warehouse', 'report-rpm', 'report-stock', 'report-missing',
     'report-loaded-totals', 'report-deviation'];
   if (known.includes(parts[0])) return { name: parts[0] };
@@ -425,6 +430,21 @@ const DB = {
     return data;
   },
 
+  /* ---- User roles ---- */
+  async getMyProfile() {
+    const uid = State.session?.user?.id;
+    if (!uid) return null;
+    const { data, error } = await sb.from('profiles').select('*').eq('id', uid).maybeSingle();
+    if (error) throw error;
+    return data;
+  },
+  async getProfiles() {
+    const { data, error } = await sb.from('profiles').select('*').order('email');
+    if (error) throw error;
+    return data;
+  },
+  async updateProfileRole(id, role) { const { error } = await sb.from('profiles').update({ role }).eq('id', id); if (error) throw error; },
+
   /* ---- Load deletion requests ---- */
   async createDeletionRequest(payload) { const { error } = await sb.from('load_deletion_requests').insert(payload); if (error) throw error; },
   async getDeletionRequests({ status } = {}) {
@@ -529,8 +549,12 @@ function renderLogin(mode = 'login', error = '') {
         const { error } = await sb.auth.signInWithPassword({ email, password });
         if (error) throw error;
       } else {
-        const { error } = await sb.auth.signUp({ email, password });
+        const { data, error } = await sb.auth.signUp({ email, password });
         if (error) throw error;
+        if (data.user) {
+          try { await sb.from('profiles').insert({ id: data.user.id, email: data.user.email, role: 'warehouse_admin' }); }
+          catch (profileErr) { console.error('profile creation failed', profileErr); }
+        }
         toast('Account created. If email confirmation is required, check your inbox, then sign in.', 'ok');
         renderLogin('login');
         return;
@@ -570,12 +594,20 @@ async function bootOnce() {
   const results = await Promise.allSettled([
     fetchWithRetry(() => DB.getCustomers()),
     fetchWithRetry(() => DB.getWarehouses()),
-    fetchWithRetry(() => DB.getSupervisors())
+    fetchWithRetry(() => DB.getSupervisors()),
+    fetchWithRetry(() => DB.getMyProfile())
   ]);
-  const [customers, warehouses, supervisors] = results;
+  const [customers, warehouses, supervisors, myProfile] = results;
   if (customers.status === 'fulfilled') State.customers = customers.value; else console.error(customers.reason);
   if (warehouses.status === 'fulfilled') State.warehouses = warehouses.value; else console.error(warehouses.reason);
   if (supervisors.status === 'fulfilled') State.supervisors = supervisors.value; else console.error(supervisors.reason);
+  if (myProfile.status === 'fulfilled') State.myRole = myProfile.value?.role || null; else console.error(myProfile.reason);
+  if (!State.myRole && State.session?.user) {
+    try {
+      await sb.from('profiles').insert({ id: State.session.user.id, email: State.session.user.email, role: 'warehouse_admin' });
+      State.myRole = 'warehouse_admin';
+    } catch (err) { console.error('auto profile creation failed', err); }
+  }
   renderShell();
   window.onhashchange = () => { State.route = parseHash(); renderContent(); };
   await renderContent();
@@ -609,6 +641,7 @@ function renderShell() {
       <div class="nav-link" data-nav="warehouses"><span class="dot"></span>Warehouses</div>
       <div class="nav-link" data-nav="supervisors"><span class="dot"></span>Supervisors</div>
       <div class="nav-link" data-nav="deleted-loads"><span class="dot"></span>Deleted loads</div>
+      <div class="nav-link" data-nav="users"><span class="dot"></span>Users &amp; roles</div>
     </div>
     <div class="main">
       <div class="topbar">
@@ -617,7 +650,7 @@ function renderShell() {
           <div class="crumb" id="page-crumb"></div>
         </div>
         <div class="topbar-right">
-          <div class="user-chip"><div class="user-avatar">${esc(initials)}</div>${esc(email)}</div>
+          <div class="user-chip"><div class="user-avatar">${esc(initials)}</div>${esc(email)} ${State.myRole ? `<span class="badge badge-blue">${esc(roleLabel(State.myRole))}</span>` : ''}</div>
           <button class="btn btn-outline btn-sm" id="logout-btn">Log out</button>
         </div>
       </div>
@@ -669,6 +702,7 @@ async function renderContent() {
     else if (State.route.name === 'warehouse') await renderWarehousePage(content, State.route.id);
     else if (State.route.name === 'supervisors') await renderSupervisors(content);
     else if (State.route.name === 'deleted-loads') await renderDeletedLoads(content);
+    else if (State.route.name === 'users') await renderUsers(content);
     else if (State.route.name === 'report-overall') await renderOverallReport(content);
     else if (State.route.name === 'report-deviation') await renderDeviationReport(content);
     else if (State.route.name === 'report-loaded-totals') await renderLoadedTotalsReport(content);
@@ -1395,6 +1429,47 @@ async function openAttachmentsModal(loadId) {
     } catch (err) { toast(err.message, 'err'); }
     finally { btn.disabled = false; btn.textContent = 'Upload'; }
   });
+}
+
+/* ================= USERS & ROLES ================= */
+async function renderUsers(content) {
+  setTitle('Users & roles', 'Manager or Supervisor role is required to authorise load deletions');
+  const profiles = await DB.getProfiles();
+  const canEdit = isManager();
+
+  content.innerHTML = `
+    ${!canEdit ? `<div class="card" style="margin-bottom:16px;"><p class="muted small" style="margin:0;">You can view roles here, but only a Manager can change them.</p></div>` : ''}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Email</th><th>Role</th>${canEdit ? '<th></th>' : ''}</tr></thead>
+        <tbody>
+          ${profiles.length ? profiles.map(p => `
+            <tr>
+              <td>${esc(p.email)} ${p.id === State.session?.user?.id ? '<span class="muted small">(you)</span>' : ''}</td>
+              <td>
+                ${canEdit
+                  ? `<select data-role="${p.id}">
+                      ${Object.entries(ROLE_LABELS).map(([k, lbl]) => `<option value="${k}" ${p.role === k ? 'selected' : ''}>${lbl}</option>`).join('')}
+                     </select>`
+                  : `<span class="badge badge-blue">${esc(roleLabel(p.role))}</span>`}
+              </td>
+              ${canEdit ? `<td><button class="btn btn-outline btn-sm" data-save-role="${p.id}">Save</button></td>` : ''}
+            </tr>`).join('') : `<tr><td colspan="3" class="empty-state">No user profiles yet.</td></tr>`}
+        </tbody>
+      </table>
+    </div>
+  `;
+
+  content.querySelectorAll('[data-save-role]').forEach(btn => btn.addEventListener('click', async () => {
+    const id = btn.dataset.saveRole;
+    const role = content.querySelector(`[data-role="${id}"]`).value;
+    try {
+      await DB.updateProfileRole(id, role);
+      toast('Role updated', 'ok');
+      if (id === State.session?.user?.id) State.myRole = role;
+      renderContent();
+    } catch (err) { toast(err.message, 'err'); }
+  }));
 }
 
 /* ---------------- start ---------------- */

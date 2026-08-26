@@ -4,9 +4,11 @@ async function renderDeletedLoads(content) {
   setTitle('Deleted loads', 'Pending deletion requests and the deleted-loads archive');
   const [pending, deleted] = await Promise.all([DB.getDeletionRequests({ status: 'pending' }), DB.getDeletedLoads()]);
   const me = currentUserStamp();
+  const canDecide = canAuthoriseDeletions();
 
   content.innerHTML = `
     <div class="section-title"><h2>Pending authorisation (${pending.length})</h2></div>
+    ${!canDecide ? `<div class="card" style="margin-bottom:16px;"><p class="muted small" style="margin:0;">Only a Manager or Supervisor can authorise a deletion request. You can still submit requests from a customer's load list.</p></div>` : ''}
     <div class="table-wrap" style="margin-bottom:24px;">
       <table>
         <thead><tr><th>Requested</th><th>Load</th><th>Destination</th><th>Reason</th><th>Requested by</th><th></th></tr></thead>
@@ -19,10 +21,12 @@ async function renderDeletedLoads(content) {
               <td class="small">${esc(r.reason)}</td>
               <td class="small muted">${esc(r.requested_by_email || '')}</td>
               <td class="row-actions">
-                ${r.requested_by === me.by
-                  ? '<span class="muted small">Awaiting another user</span>'
-                  : `<button class="btn btn-primary btn-sm" data-approve="${r.id}" data-load="${r.load_id}">Approve</button>
-                     <button class="btn btn-outline btn-sm" data-reject="${r.id}" style="color:var(--red); border-color:#f3caca;">Reject</button>`}
+                ${!canDecide
+                  ? '<span class="muted small">Awaiting Manager/Supervisor</span>'
+                  : r.requested_by === me.by
+                    ? '<span class="muted small">Awaiting another Manager/Supervisor</span>'
+                    : `<button class="btn btn-primary btn-sm" data-approve="${r.id}" data-load="${r.load_id}">Approve</button>
+                       <button class="btn btn-outline btn-sm" data-reject="${r.id}" style="color:var(--red); border-color:#f3caca;">Reject</button>`}
               </td>
             </tr>`).join('') : `<tr><td colspan="6" class="empty-state">No deletion requests waiting on authorisation.</td></tr>`}
         </tbody>
