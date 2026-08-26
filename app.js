@@ -15,7 +15,6 @@ if (window.ChartDataLabels) {
 }
 
 const RPM_RATIO = { frames: 1, layercards: 15 };
-const SET_LAYERCARDS = 15;
 
 const STATUS_LABELS = { planned: 'Planned', loaded: 'Loaded', dispatched: 'Dispatched', cancelled: 'Cancelled' };
 const STATUS_BADGE = { planned: 'badge-amber', loaded: 'badge-green', dispatched: 'badge-blue', cancelled: 'badge-gray' };
@@ -85,6 +84,10 @@ function cansFromPallets(pallets) { return (pallets === null || pallets === unde
 function fmtCansCalc(pallets) { const c = cansFromPallets(pallets); return c === null ? '—' : c.toFixed(2) + 'M'; }
 function fmtCansPair(plannedPallets, actualPallets) { return `${fmtCansCalc(actualPallets)} (${fmtCansCalc(plannedPallets)})`; }
 function dayNightLabel(v) { return v === 'day' ? 'Day' : v === 'night' ? 'Night' : ''; }
+function fmtM1(v) { return (v === null || v === undefined || v === '') ? '—' : Number(v).toFixed(1) + 'm'; }
+
+const TOTAL_SOH_CAPACITY_M = 75;
+const LAYERCARDS_PER_PALLET = 15;
 
 function isoWeek(dateStr) {
   if (!dateStr) return null;
@@ -136,6 +139,7 @@ async function syncSohForLoad(load) {
       const stamp = currentUserStamp();
       await sb.from('soh_movements').insert({
         movement_type: 'dispatch',
+        kind: 'FG',
         quantity_pallets: load.actual_pallets || null,
         quantity_cans_m: load.actual_cans_m || null,
         movement_date: load.loading_date || todayISO(),
@@ -186,28 +190,32 @@ function computeInternalStockBalances(stock, market) {
   const result = {};
   items.forEach(item => {
     const rows = stock.filter(s => s.item_type === item && (!market || s.market === market));
-    const received = rows.filter(r => r.movement_type === 'receive_unsorted').reduce((s, r) => s + num(r.quantity), 0);
-    const sorted = rows.filter(r => r.movement_type === 'mark_sorted').reduce((s, r) => s + num(r.quantity), 0);
-    const issued = rows.filter(r => r.movement_type === 'issue_ready').reduce((s, r) => s + num(r.quantity), 0);
-    result[item] = { toSort: received - sorted, ready: sorted - issued };
+    const toSort = rows.filter(r => r.movement_type === 'to_be_sorted').reduce((s, r) => s + num(r.quantity), 0);
+    const ready = rows.filter(r => r.movement_type === 'ready').reduce((s, r) => s + num(r.quantity), 0);
+    result[item] = { toSort, ready };
   });
   return result;
 }
 
-async function computeRpmDaysCover(market) {
-  const to = todayISO();
-  const from = addDays(to, -30);
-  const [loads, stock] = await Promise.all([DB.getLoads({ dateFrom: from, dateTo: to }), DB.getRpmInternalStock()]);
-  const relevant = loads.filter(l => (l.status === 'loaded' || l.status === 'dispatched') && (!market || l.market === market));
-  const avgDaily = relevant.reduce((s, l) => s + num(l.actual_pallets), 0) / 30;
-  const balances = computeInternalStockBalances(stock, market);
-  const dPallets = avgDaily > 0 ? balances.pallet.ready / avgDaily : null;
-  const dFrames = avgDaily > 0 ? balances.frame.ready / avgDaily : null;
-  const dCards = avgDaily > 0 ? balances.layercard.ready / (avgDaily * SET_LAYERCARDS) : null;
-  const values = [dPallets, dFrames, dCards].filter(v => v !== null);
-  return { avgDaily, balances, dPallets, dFrames, dCards, overall: values.length ? Math.min(...values) : null };
+function requiredRpmForPlan(plannedQuantityCans) {
+  const q = num(plannedQuantityCans);
+  const pallets = q / CANS_PER_PALLET;
+  const frames = q / CANS_PER_PALLET;
+  const layercards = Math.floor((q / CANS_PER_PALLET) / LAYERCARDS_PER_PALLET);
+  return { pallets, frames, layercards };
 }
-function fmtDays(v) { return v === null || v === undefined ? '—' : `${v.toFixed(1)}d`; }
+
+async function computeRpmCover(market) {
+  const [stock, plan] = await Promise.all([DB.getRpmInternalStock(), DB.getRpmProductionPlan(market)]);
+  const balances = computeInternalStockBalances(stock, market);
+  const required = requiredRpmForPlan(plan?.planned_quantity_cans);
+  const coverPallets = required.pallets > 0 ? balances.pallet.ready / required.pallets : null;
+  const coverFrames = required.frames > 0 ? balances.frame.ready / required.frames : null;
+  const coverCards = required.layercards > 0 ? balances.layercard.ready / required.layercards : null;
+  const values = [coverPallets, coverFrames, coverCards].filter(v => v !== null);
+  return { balances, required, planQty: plan?.planned_quantity_cans ?? null, coverPallets, coverFrames, coverCards, overall: values.length ? Math.min(...values) : null };
+}
+function fmtCover(v) { return v === null || v === undefined ? '—' : `${(v * 100).toFixed(0)}%`; }
 
 function supervisorName(id) { return State.supervisors.find(s => s.id === id)?.name || ''; }
 function supervisorCell(rec) {
@@ -422,8 +430,10 @@ const DB = {
   async createRpmMovement(payload) { const { error } = await sb.from('rpm_movements').insert(payload); if (error) throw error; },
 
   /* ---- Stock on hand ---- */
-  async getSohMovements() {
-    const { data, error } = await sb.from('soh_movements').select('*').order('movement_date', { ascending: true });
+  async getSohMovements(kind) {
+    let q = sb.from('soh_movements').select('*').order('movement_date', { ascending: true });
+    if (kind) q = q.eq('kind', kind);
+    const { data, error } = await q;
     if (error) throw error;
     return data;
   },
@@ -478,11 +488,40 @@ const DB = {
     if (error) throw error;
     return data;
   },
-  async createRpmInternalStock(payload) { const { error } = await sb.from('rpm_internal_stock').insert(payload); if (error) throw error; },
+  async logRpmInternalMovement({ bucket, market, quantityPallets, date, comments }) {
+    const stamp = currentUserStamp();
+    const qty = Number(quantityPallets);
+    const rows = [
+      { item_type: 'pallet', quantity: qty },
+      { item_type: 'frame', quantity: qty },
+      { item_type: 'layercard', quantity: qty * LAYERCARDS_PER_PALLET }
+    ].map(r => ({
+      ...r, movement_type: bucket, market, movement_date: date, comments,
+      created_by: stamp.by, created_by_email: stamp.email
+    }));
+    const { error } = await sb.from('rpm_internal_stock').insert(rows);
+    if (error) throw error;
+  },
+
+  /* ---- RPM production plan (drives cover %) ---- */
+  async getRpmProductionPlan(market) {
+    const { data, error } = await sb.from('rpm_production_plan').select('*').eq('market', market).maybeSingle();
+    if (error) throw error;
+    return data;
+  },
+  async setRpmProductionPlan(market, plannedQuantityCans) {
+    const stamp = currentUserStamp();
+    const { error } = await sb.from('rpm_production_plan').upsert({
+      market, planned_quantity_cans: plannedQuantityCans, updated_at: new Date().toISOString(), updated_by_email: stamp.email
+    });
+    if (error) throw error;
+  },
 
   /* ---- SOH per-design stock counts ---- */
-  async getSohDesignRecords() {
-    const { data, error } = await sb.from('soh_design_records').select('*').order('production_date', { ascending: false });
+  async getSohDesignRecords(kind) {
+    let q = sb.from('soh_design_records').select('*').order('production_date', { ascending: false });
+    if (kind) q = q.eq('kind', kind);
+    const { data, error } = await q;
     if (error) throw error;
     return data;
   },

@@ -9,8 +9,8 @@ async function renderOverallReport(content) {
     DB.getLoads({ dateFrom: from, dateTo: to }),
     DB.getWarehouseDispatches({ dateFrom: from, dateTo: to }),
     DB.getSohMovements(),
-    computeRpmDaysCover('local'),
-    computeRpmDaysCover('export')
+    computeRpmCover('local'),
+    computeRpmCover('export')
   ]);
 
   const totalPlanned = loads.reduce((s, l) => s + num(l.planned_pallets), 0);
@@ -49,8 +49,8 @@ async function renderOverallReport(content) {
       <div class="stat-card"><div class="stat-label">SOH balance</div><div class="stat-value">${sohBalance}</div><div class="stat-sub">pallets, as of ${fmtDate(to)}</div></div>
     </div>
     <div class="grid grid-2" style="margin-bottom:20px;">
-      <div class="stat-card"><div class="stat-label">Local RPM Day Cover</div><div class="stat-value">${fmtDays(localCover.overall)}</div><div class="stat-sub">ready pallets/frames/cards at In Warehouse ÷ 30-day avg use</div></div>
-      <div class="stat-card"><div class="stat-label">Export RPM Day Cover</div><div class="stat-value">${fmtDays(exportCover.overall)}</div><div class="stat-sub">ready pallets/frames/cards at In Warehouse ÷ 30-day avg use</div></div>
+      <div class="stat-card"><div class="stat-label">Local RPM Cover</div><div class="stat-value">${fmtCover(localCover.overall)}</div><div class="stat-sub">In Warehouse ready ÷ planned production run requirement</div></div>
+      <div class="stat-card"><div class="stat-label">Export RPM Cover</div><div class="stat-value">${fmtCover(exportCover.overall)}</div><div class="stat-sub">In Warehouse ready ÷ planned production run requirement</div></div>
     </div>
     <div class="card chart-card" style="margin-bottom:20px;">
       <div class="section-title"><h2>Pallets loaded per customer</h2></div>
@@ -292,7 +292,7 @@ let rpmReportState = makePeriodState('month');
 async function renderRpmReport(content) {
   setTitle('RPM report', 'Returnable packaging material — pallets, top frames and layer cards');
   const { from, to } = periodRangeFor(rpmReportState);
-  const [all, stock] = await Promise.all([DB.getRpmMovements(), DB.getRpmInternalStock()]);
+  const all = await DB.getRpmMovements();
   const inPeriod = all.filter(r => (!from || r.movement_date >= from) && (!to || r.movement_date <= to));
   const toDate = all.filter(r => !to || r.movement_date <= to);
 
@@ -317,21 +317,26 @@ async function renderRpmReport(content) {
     bucket.pallets += num(r.quantity_pallets); bucket.frames += num(r.quantity_frames); bucket.layercards += num(r.quantity_layercards);
   });
 
-  const internalBalancesLocal = computeInternalStockBalances(stock, 'local');
-  const internalBalancesExport = computeInternalStockBalances(stock, 'export');
-  const [localCover, exportCover] = await Promise.all([computeRpmDaysCover('local'), computeRpmDaysCover('export')]);
+  const [localCover, exportCover] = await Promise.all([computeRpmCover('local'), computeRpmCover('export')]);
 
-  function inWarehouseTableHtml(market, balances, cover) {
+  function inWarehouseTableHtml(market, cover) {
     return `
       <div class="card">
         <h3 style="margin-top:0; text-transform:capitalize;">${esc(market)} — In Warehouse</h3>
-        <div class="stat-sub" style="margin-bottom:10px;">Days cover (set = 1 pallet + 1 frame + 15 cards): <b>${fmtDays(cover.overall)}</b></div>
+        <div class="field" style="max-width:260px;">
+          <label>Planned production run (cans)</label>
+          <div style="display:flex; gap:6px;">
+            <input type="number" step="1" id="plan-${market}" value="${cover.planQty ?? ''}" />
+            <button class="btn btn-outline btn-sm" data-save-plan="${market}">Save</button>
+          </div>
+        </div>
+        <div class="stat-sub" style="margin:10px 0;">Cover (Ready ÷ requirement from the plan above): <b>${fmtCover(cover.overall)}</b></div>
         <table>
-          <thead><tr><th>Item</th><th class="num">To be sorted</th><th class="num">Ready</th><th class="num">Days cover</th></tr></thead>
+          <thead><tr><th>Item</th><th class="num">To be sorted</th><th class="num">Ready</th><th class="num">Required</th><th class="num">Cover</th></tr></thead>
           <tbody>
-            <tr><td>Pallets</td><td class="num">${balances.pallet.toSort}</td><td class="num">${balances.pallet.ready}</td><td class="num">${fmtDays(cover.dPallets)}</td></tr>
-            <tr><td>Frames</td><td class="num">${balances.frame.toSort}</td><td class="num">${balances.frame.ready}</td><td class="num">${fmtDays(cover.dFrames)}</td></tr>
-            <tr><td>Layer cards</td><td class="num">${balances.layercard.toSort}</td><td class="num">${balances.layercard.ready}</td><td class="num">${fmtDays(cover.dCards)}</td></tr>
+            <tr><td>Pallets</td><td class="num">${cover.balances.pallet.toSort}</td><td class="num">${cover.balances.pallet.ready}</td><td class="num">${cover.required.pallets.toFixed(2)}</td><td class="num">${fmtCover(cover.coverPallets)}</td></tr>
+            <tr><td>Frames</td><td class="num">${cover.balances.frame.toSort}</td><td class="num">${cover.balances.frame.ready}</td><td class="num">${cover.required.frames.toFixed(2)}</td><td class="num">${fmtCover(cover.coverFrames)}</td></tr>
+            <tr><td>Layer cards</td><td class="num">${cover.balances.layercard.toSort}</td><td class="num">${cover.balances.layercard.ready}</td><td class="num">${cover.required.layercards}</td><td class="num">${fmtCover(cover.coverCards)}</td></tr>
           </tbody>
         </table>
       </div>`;
@@ -377,8 +382,8 @@ async function renderRpmReport(content) {
 
     <div class="section-title"><h2>In Warehouse (GZI internal — pallets, layer pads, frames)</h2></div>
     <div class="grid grid-2" style="margin-bottom:20px;">
-      ${inWarehouseTableHtml('local', internalBalancesLocal, localCover)}
-      ${inWarehouseTableHtml('export', internalBalancesExport, exportCover)}
+      ${inWarehouseTableHtml('local', localCover)}
+      ${inWarehouseTableHtml('export', exportCover)}
     </div>
 
     <div class="section-title"><h2>Movements in period</h2></div>
@@ -405,6 +410,15 @@ async function renderRpmReport(content) {
   bindPeriodFilter(rpmReportState, 'rpm', renderContent);
   $('#log-rpm-btn').addEventListener('click', () => openRpmModal());
   $('#log-instock-btn').addEventListener('click', () => openRpmInternalStockModal());
+  content.querySelectorAll('[data-save-plan]').forEach(btn => btn.addEventListener('click', async () => {
+    const market = btn.dataset.savePlan;
+    const qty = $(`#plan-${market}`).value;
+    try {
+      await DB.setRpmProductionPlan(market, qty === '' ? null : qty);
+      toast('Planned production run saved', 'ok');
+      renderContent();
+    } catch (err) { toast(err.message, 'err'); }
+  }));
 }
 
 function openRpmModal() {
@@ -435,8 +449,8 @@ function openRpmModal() {
             <select id="f-market"><option value="">—</option><option value="local">Local</option><option value="export">Export</option></select>
           </div>
           <div class="field"><label>Pallets *</label><input type="number" step="0.01" id="f-qty" /></div>
-          <div class="field"><label>Frames</label><input type="number" step="0.01" id="f-frames" /></div>
-          <div class="field"><label>Layer cards</label><input type="number" step="0.01" id="f-cards" /></div>
+          <div class="field"><label>Frames <span class="muted">(auto)</span></label><input type="number" id="f-frames" disabled /></div>
+          <div class="field"><label>Layer cards <span class="muted">(auto)</span></label><input type="number" id="f-cards" disabled /></div>
           <div class="field"><label>Date</label><input type="date" id="f-date" value="${todayISO()}" /></div>
           <div class="field span-2"><label>Comments</label><textarea id="f-comments" rows="2"></textarea></div>
         </div>
@@ -459,8 +473,8 @@ function openRpmModal() {
   });
   $('#f-qty').addEventListener('input', () => {
     const pallets = Number($('#f-qty').value) || 0;
-    if (!$('#f-frames').value) $('#f-frames').value = pallets ? pallets * RPM_RATIO.frames : '';
-    if (!$('#f-cards').value) $('#f-cards').value = pallets ? pallets * RPM_RATIO.layercards : '';
+    $('#f-frames').value = pallets ? pallets * RPM_RATIO.frames : '';
+    $('#f-cards').value = pallets ? pallets * RPM_RATIO.layercards : '';
   });
   $('#modal-save').addEventListener('click', async () => {
     const entityId = entityType === 'customer' ? $('#f-entity-customer').value : $('#f-entity-warehouse').value;
@@ -471,7 +485,7 @@ function openRpmModal() {
     try {
       await DB.createRpmMovement({
         entity_type: entityType, entity_id: entityId, direction: $('#f-direction').value,
-        quantity_pallets: qty, quantity_frames: $('#f-frames').value || null, quantity_layercards: $('#f-cards').value || null,
+        quantity_pallets: qty, quantity_frames: Number(qty) * RPM_RATIO.frames, quantity_layercards: Number(qty) * RPM_RATIO.layercards,
         market: $('#f-market').value || null,
         movement_date: $('#f-date').value || todayISO(),
         comments: $('#f-comments').value.trim() || null,
@@ -486,25 +500,22 @@ function openRpmModal() {
 
 function openRpmInternalStockModal() {
   openModal(`
-    <div class="modal-header"><h3>Log In-Warehouse RPM movement</h3><button class="modal-close" id="modal-close">&times;</button></div>
+    <div class="modal-header"><h3>Log In-Warehouse RPM</h3><button class="modal-close" id="modal-close">&times;</button></div>
     <div class="modal-body">
       <form id="instock-form">
         <div class="form-grid">
-          <div class="field"><label>Item</label>
-            <select id="f-item"><option value="pallet">Pallet</option><option value="frame">Frame</option><option value="layercard">Layer card</option></select>
-          </div>
-          <div class="field"><label>Movement</label>
-            <select id="f-movement">
-              <option value="receive_unsorted">Receive (to be sorted)</option>
-              <option value="mark_sorted">Mark sorted (to be sorted → ready)</option>
-              <option value="issue_ready">Issue (ready → out)</option>
+          <div class="field"><label>Add to</label>
+            <select id="f-bucket">
+              <option value="to_be_sorted">To be sorted</option>
+              <option value="ready">Ready</option>
             </select>
           </div>
           <div class="field"><label>Market</label>
             <select id="f-market"><option value="local">Local</option><option value="export">Export</option></select>
           </div>
-          <div class="field"><label>Quantity *</label><input type="number" step="0.01" id="f-qty" /></div>
+          <div class="field"><label>Pallets *</label><input type="number" step="0.01" id="f-qty" /></div>
           <div class="field"><label>Date</label><input type="date" id="f-date" value="${todayISO()}" /></div>
+          <div class="field span-2"><label class="muted">Frames = same as pallets, Layer cards = pallets × ${RPM_RATIO.layercards} — added automatically.</label></div>
           <div class="field span-2"><label>Comments</label><textarea id="f-comments" rows="2"></textarea></div>
         </div>
       </form>
@@ -518,14 +529,11 @@ function openRpmInternalStockModal() {
   $('#modal-cancel').addEventListener('click', closeModal);
   $('#modal-save').addEventListener('click', async () => {
     const qty = $('#f-qty').value;
-    if (!qty) { toast('Enter a quantity', 'err'); return; }
-    const stamp = currentUserStamp();
+    if (!qty) { toast('Enter a pallet quantity', 'err'); return; }
     try {
-      await DB.createRpmInternalStock({
-        item_type: $('#f-item').value, movement_type: $('#f-movement').value, quantity: qty,
-        market: $('#f-market').value, movement_date: $('#f-date').value || todayISO(),
-        comments: $('#f-comments').value.trim() || null,
-        created_by: stamp.by, created_by_email: stamp.email
+      await DB.logRpmInternalMovement({
+        bucket: $('#f-bucket').value, market: $('#f-market').value, quantityPallets: qty,
+        date: $('#f-date').value || todayISO(), comments: $('#f-comments').value.trim() || null
       });
       closeModal();
       toast('In-Warehouse movement logged', 'ok');
@@ -534,12 +542,13 @@ function openRpmInternalStockModal() {
   });
 }
 
-/* ================= STOCK (SOH) REPORT ================= */
+/* ================= STOCK (SOH FG / HFI) REPORT ================= */
 let stockReportState = makePeriodState('month');
+let stockReportKind = 'FG';
 async function renderStockReport(content) {
-  setTitle('Stock (SOH)', 'Production receipts vs dispatches, and per-design stock counts');
+  setTitle('Stock (SOH FG / HFI)', 'Finished goods and Held For Inspection stock, receipts vs dispatches, per-design counts');
   const { from, to } = periodRangeFor(stockReportState);
-  const [all, designRecords] = await Promise.all([DB.getSohMovements(), DB.getSohDesignRecords()]);
+  const [all, designRecords] = await Promise.all([DB.getSohMovements(stockReportKind), DB.getSohDesignRecords(stockReportKind)]);
   const toDate = all.filter(m => !to || m.movement_date <= to);
   const inPeriod = all.filter(m => (!from || m.movement_date >= from) && (!to || m.movement_date <= to));
   const balancePallets = toDate.reduce((s, m) => s + (m.movement_type === 'production_receipt' ? num(m.quantity_pallets) : -num(m.quantity_pallets)), 0);
@@ -549,10 +558,14 @@ async function renderStockReport(content) {
   const openVariances = designRecords.filter(d => !d.resolved_at);
 
   content.innerHTML = `
+    <div class="tab-group" id="stock-kind-tabs" style="margin-bottom:14px;">
+      <button type="button" data-k="FG" class="${stockReportKind === 'FG' ? 'active' : ''}">SOH FG</button>
+      <button type="button" data-k="HFI" class="${stockReportKind === 'HFI' ? 'active' : ''}">HFI</button>
+    </div>
     ${periodFilterHtml(stockReportState, 'stock')}
-    <div class="section-title"><h2>Stock on hand — balance as of ${fmtDate(to)}</h2><div class="actions"><button class="btn btn-orange btn-sm" id="add-receipt-btn">+ Record production receipt</button></div></div>
+    <div class="section-title"><h2>${esc(stockReportKind)} balance as of ${fmtDate(to)}</h2><div class="actions"><button class="btn btn-orange btn-sm" id="add-receipt-btn">+ Record production receipt</button></div></div>
     <div class="grid grid-4" style="margin-bottom:20px;">
-      <div class="stat-card"><div class="stat-label">SOH balance</div><div class="stat-value">${balancePallets}</div><div class="stat-sub">${fmtCans(balanceCans)} cans</div></div>
+      <div class="stat-card"><div class="stat-label">${esc(stockReportKind)} balance</div><div class="stat-value">${balancePallets}</div><div class="stat-sub">${fmtM1(balanceCans)} cans</div></div>
       <div class="stat-card"><div class="stat-label">Received in period</div><div class="stat-value">${receivedInPeriod}</div></div>
       <div class="stat-card"><div class="stat-label">Dispatched in period</div><div class="stat-value">${dispatchedInPeriod}</div></div>
       <div class="stat-card"><div class="stat-label">Open design variances</div><div class="stat-value" style="color:${openVariances.length ? 'var(--red)' : 'var(--green)'}">${openVariances.length}</div></div>
@@ -567,7 +580,7 @@ async function renderStockReport(content) {
               <td>${esc(fmtDateShort(m.movement_date))}</td>
               <td><span class="badge ${m.movement_type === 'production_receipt' ? 'badge-green' : 'badge-blue'}">${m.movement_type === 'production_receipt' ? 'Receipt' : 'Dispatch'}</span></td>
               <td class="num">${nOrDash(m.quantity_pallets)}</td>
-              <td class="num">${fmtCans(m.quantity_cans_m)}</td>
+              <td class="num">${fmtM1(m.quantity_cans_m)}</td>
               <td class="small muted">${esc(m.description || '')}</td>
               <td class="small muted">${esc(m.created_by_email || (m.movement_type === 'dispatch' ? 'auto' : ''))}</td>
             </tr>`).join('') : `<tr><td colspan="6" class="empty-state">No stock movements in this period.</td></tr>`}
@@ -578,12 +591,13 @@ async function renderStockReport(content) {
     <div class="section-title"><h2>Design stock counts (SAP vs Counted)</h2><div class="actions"><button class="btn btn-orange btn-sm" id="add-count-btn">+ Record stock count</button></div></div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Design</th><th>Market</th><th>Production date</th><th class="num">SAP qty</th><th class="num">Counted qty</th><th class="num">Variance</th><th>Resolved</th><th></th></tr></thead>
+        <thead><tr><th>Design</th><th>Bin</th><th>Market</th><th>Production date</th><th class="num">SAP qty</th><th class="num">Counted qty</th><th class="num">Variance</th><th>Resolved</th><th></th></tr></thead>
         <tbody>
           ${designRecords.length ? designRecords.map(d => {
             const variance = num(d.counted_quantity) - num(d.sap_quantity);
             return `<tr>
               <td>${esc(d.design)}</td>
+              <td class="small muted">${esc(d.bin_location || '')}</td>
               <td class="small">${d.market ? esc(d.market === 'local' ? 'Local' : 'Export') : ''}</td>
               <td>${esc(fmtDateShort(d.production_date))}</td>
               <td class="num">${nOrDash(d.sap_quantity)}</td>
@@ -592,26 +606,29 @@ async function renderStockReport(content) {
               <td>${d.resolved_at ? `<span class="badge badge-green">Resolved ${esc(fmtDateShort(d.resolved_at))}</span>` : '<span class="badge badge-amber">Open</span>'}</td>
               <td>${!d.resolved_at ? `<button class="btn btn-outline btn-sm" data-resolve="${d.id}">Resolve</button>` : ''}</td>
             </tr>`;
-          }).join('') : `<tr><td colspan="8" class="empty-state">No stock counts recorded yet.</td></tr>`}
+          }).join('') : `<tr><td colspan="9" class="empty-state">No stock counts recorded yet.</td></tr>`}
         </tbody>
       </table>
     </div>
   `;
   bindPeriodFilter(stockReportState, 'stock', renderContent);
-  $('#add-receipt-btn').addEventListener('click', () => openReceiptModal());
-  $('#add-count-btn').addEventListener('click', () => openSohDesignModal());
+  $('#stock-kind-tabs').querySelectorAll('button').forEach(btn => {
+    btn.addEventListener('click', () => { stockReportKind = btn.dataset.k; renderContent(); });
+  });
+  $('#add-receipt-btn').addEventListener('click', () => openReceiptModal(stockReportKind));
+  $('#add-count-btn').addEventListener('click', () => openSohDesignModal(stockReportKind));
   content.querySelectorAll('[data-resolve]').forEach(el => el.addEventListener('click', () => openResolveVarianceModal(el.dataset.resolve)));
 }
 
-function openReceiptModal() {
+function openReceiptModal(kind) {
   openModal(`
-    <div class="modal-header"><h3>Record production receipt</h3><button class="modal-close" id="modal-close">&times;</button></div>
+    <div class="modal-header"><h3>Record ${esc(kind)} production receipt</h3><button class="modal-close" id="modal-close">&times;</button></div>
     <div class="modal-body">
       <form id="receipt-form">
         <div class="form-grid">
           <div class="field"><label>Date</label><input type="date" id="f-date" value="${todayISO()}" /></div>
           <div class="field"><label>Pallets *</label><input type="number" step="0.01" id="f-pallets" /></div>
-          <div class="field"><label>Cans (M)</label><input type="number" step="0.01" id="f-cans" /></div>
+          <div class="field"><label>Cans (M)</label><input type="number" step="0.01" id="f-cans" placeholder="auto: pallets × 5446 ÷ 1M" /></div>
           <div class="field span-2"><label>Description</label><input id="f-desc" placeholder="e.g. New production run — Design X" /></div>
         </div>
       </form>
@@ -623,6 +640,10 @@ function openReceiptModal() {
   `);
   $('#modal-close').addEventListener('click', closeModal);
   $('#modal-cancel').addEventListener('click', closeModal);
+  $('#f-pallets').addEventListener('input', () => {
+    const pallets = $('#f-pallets').value;
+    $('#f-cans').value = pallets ? cansFromPallets(pallets).toFixed(2) : '';
+  });
   $('#modal-save').addEventListener('click', async () => {
     const pallets = $('#f-pallets').value;
     if (!pallets) { toast('Enter a pallet quantity', 'err'); return; }
@@ -630,8 +651,9 @@ function openReceiptModal() {
     try {
       await DB.createSohMovement({
         movement_type: 'production_receipt',
+        kind,
         quantity_pallets: pallets,
-        quantity_cans_m: $('#f-cans').value || null,
+        quantity_cans_m: $('#f-cans').value || cansFromPallets(pallets),
         movement_date: $('#f-date').value || todayISO(),
         description: $('#f-desc').value.trim() || 'Production receipt',
         created_by: stamp.by, created_by_email: stamp.email
@@ -643,13 +665,14 @@ function openReceiptModal() {
   });
 }
 
-function openSohDesignModal() {
+function openSohDesignModal(kind) {
   openModal(`
-    <div class="modal-header"><h3>Record stock count</h3><button class="modal-close" id="modal-close">&times;</button></div>
+    <div class="modal-header"><h3>Record ${esc(kind)} stock count</h3><button class="modal-close" id="modal-close">&times;</button></div>
     <div class="modal-body">
       <form id="design-form">
         <div class="form-grid">
           <div class="field span-2"><label>Design *</label><input id="f-design" required /></div>
+          <div class="field"><label>Bin location</label><input id="f-bin" placeholder="e.g. A-12" /></div>
           <div class="field"><label>Market</label>
             <select id="f-market"><option value="">—</option><option value="local">Local</option><option value="export">Export</option></select>
           </div>
@@ -674,7 +697,7 @@ function openSohDesignModal() {
     const stamp = currentUserStamp();
     try {
       await DB.createSohDesignRecord({
-        design, market: $('#f-market').value || null, production_date: $('#f-prod-date').value || null,
+        design, kind, bin_location: $('#f-bin').value.trim() || null, market: $('#f-market').value || null, production_date: $('#f-prod-date').value || null,
         sap_quantity: sap, counted_quantity: counted,
         created_by: stamp.by, created_by_email: stamp.email
       });

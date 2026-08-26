@@ -15,13 +15,19 @@ async function renderDashboard(content) {
 
   const totalPlanned = loads.reduce((s, l) => s + num(l.planned_pallets), 0);
   const totalActual = loads.reduce((s, l) => s + num(l.actual_pallets), 0);
+  const totalPlannedCans = loads.reduce((s, l) => s + (cansFromPallets(l.planned_pallets) || 0), 0);
+  const totalActualCans = loads.reduce((s, l) => s + (cansFromPallets(l.actual_pallets) || 0), 0);
   const deviationLoads = loads.filter(l => (l.status === 'loaded' || l.status === 'dispatched') && num(l.actual_pallets) !== num(l.planned_pallets));
   const missing = loads.filter(l => (l.status === 'loaded' || l.status === 'dispatched') && !attachmentIds.has(l.id));
 
   const rpmToDate = rpmAll.filter(r => !to || r.movement_date <= to);
   const rpmOutstanding = rpmToDate.reduce((s, r) => s + (r.direction === 'sent' ? num(r.quantity_pallets) : -num(r.quantity_pallets)), 0);
   const sohToDate = sohAll.filter(m => !to || m.movement_date <= to);
-  const sohBalance = sohToDate.reduce((s, m) => s + (m.movement_type === 'production_receipt' ? num(m.quantity_pallets) : -num(m.quantity_pallets)), 0);
+  const sohCansByKind = (kind) => sohToDate.filter(m => m.kind === kind).reduce((s, m) => s + (m.movement_type === 'production_receipt' ? num(m.quantity_cans_m) : -num(m.quantity_cans_m)), 0);
+  const sohFgCans = sohCansByKind('FG');
+  const sohHfiCans = sohCansByKind('HFI');
+  const spaceUsed = sohFgCans + sohHfiCans;
+  const spaceUtilPct = TOTAL_SOH_CAPACITY_M > 0 ? (spaceUsed / TOTAL_SOH_CAPACITY_M) * 100 : null;
 
   const days = [];
   for (let d = from; d <= to; d = addDays(d, 1)) { days.push(d); if (days.length > 60) break; }
@@ -48,9 +54,14 @@ async function renderDashboard(content) {
     ${periodFilterHtml(dashboardState, 'dash')}
     <div class="grid grid-4" style="margin-bottom:20px;">
       <div class="stat-card"><div class="stat-label">Planned / Actual pallets</div><div class="stat-value">${totalPlanned} / ${totalActual}</div></div>
+      <div class="stat-card"><div class="stat-label">Cans (M)</div><div class="stat-value">${fmtM1(totalActualCans)} (${fmtM1(totalPlannedCans)})</div><div class="stat-sub">actual (planned)</div></div>
       <div class="stat-card"><div class="stat-label">Loads with a deviation</div><div class="stat-value" style="color:${deviationLoads.length ? 'var(--red)' : 'var(--green)'}">${deviationLoads.length}</div></div>
       <div class="stat-card"><div class="stat-label">RPM outstanding</div><div class="stat-value">${rpmOutstanding}</div><div class="stat-sub">pallets</div></div>
-      <div class="stat-card"><div class="stat-label">SOH balance</div><div class="stat-value">${sohBalance}</div><div class="stat-sub">pallets, as of ${fmtDate(to)}</div></div>
+    </div>
+    <div class="grid grid-3" style="margin-bottom:20px;">
+      <div class="stat-card"><div class="stat-label">SOH FG</div><div class="stat-value">${fmtM1(sohFgCans)}</div><div class="stat-sub">as of ${fmtDate(to)}</div></div>
+      <div class="stat-card"><div class="stat-label">HFI</div><div class="stat-value">${fmtM1(sohHfiCans)}</div><div class="stat-sub">as of ${fmtDate(to)}</div></div>
+      <div class="stat-card"><div class="stat-label">Total space utilisation</div><div class="stat-value">${spaceUtilPct === null ? '—' : spaceUtilPct.toFixed(1) + '%'}</div><div class="stat-sub">${fmtM1(spaceUsed)} / ${TOTAL_SOH_CAPACITY_M}m capacity</div></div>
     </div>
     <div class="grid grid-2" style="margin-bottom:20px;">
       <div class="card chart-card">
