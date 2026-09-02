@@ -1286,6 +1286,7 @@ function openLoadModal(ctx, load) {
   let destType = load?.destination_type || (ctx.warehouse ? 'warehouse' : 'customer');
   const selectedCustomerId = load?.customer_id || ctx.customer?.id || '';
   const selectedWarehouseId = load?.warehouse_id || ctx.warehouse?.id || '';
+  const transporterIsOther = !!load?.transporter && !State.transporters.some(t => t.name === load.transporter);
 
   const titleTarget = destType === 'warehouse'
     ? (State.warehouses.find(w => w.id === selectedWarehouseId)?.name || '')
@@ -1339,8 +1340,9 @@ function openLoadModal(ctx, load) {
             <select id="f-transporter">
               <option value="">—</option>
               ${State.transporters.filter(t => t.active).map(t => `<option value="${esc(t.name)}" ${load?.transporter === t.name ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}
-              ${load?.transporter && !State.transporters.some(t => t.name === load.transporter) ? `<option value="${esc(load.transporter)}" selected>${esc(load.transporter)} (not in list)</option>` : ''}
+              <option value="__other__" ${transporterIsOther ? 'selected' : ''}>Other (type name)…</option>
             </select>
+            <input id="f-transporter-other" placeholder="Enter transporter name" value="${transporterIsOther ? esc(load.transporter) : ''}" style="margin-top:8px; ${transporterIsOther ? '' : 'display:none;'}" />
           </div>
           <div class="field"><label>Fleet / driver</label><input id="f-fleet" value="${v('fleet_details')}" /></div>
           <div class="field"><label>Reg number</label><input id="f-reg" value="${v('reg_number')}" /></div>
@@ -1402,6 +1404,13 @@ function openLoadModal(ctx, load) {
     if (shift) $('#f-shift').value = 'Shift ' + shift;
   });
 
+  $('#f-transporter').addEventListener('change', () => {
+    const other = $('#f-transporter-other');
+    const show = $('#f-transporter').value === '__other__';
+    other.style.display = show ? '' : 'none';
+    if (show) other.focus();
+  });
+
   function updateCansPreview() {
     $('#cans-preview').textContent = `Actual ${fmtCansCalc($('#f-actual').value)} (Planned ${fmtCansCalc($('#f-planned').value)})`;
   }
@@ -1416,6 +1425,13 @@ function openLoadModal(ctx, load) {
     const warehouse_id = destType === 'warehouse' ? g('#f-dest-warehouse') : null;
     if (destType === 'customer' && !customer_id) { toast('Select a customer', 'err'); return; }
     if (destType === 'warehouse' && !warehouse_id) { toast('Select a warehouse', 'err'); return; }
+
+    let transporter = $('#f-transporter').value;
+    if (transporter === '__other__') {
+      transporter = $('#f-transporter-other').value.trim();
+      if (!transporter) { toast('Enter the transporter name', 'err'); return; }
+    }
+    transporter = transporter || null;
 
     submitting = true;
     const saveBtn = $('#modal-save');
@@ -1438,7 +1454,7 @@ function openLoadModal(ctx, load) {
       market: g('#f-market'),
       day_night: g('#f-day-night'),
       despatching_plant: g('#f-plant'),
-      transporter: g('#f-transporter'),
+      transporter,
       fleet_details: g('#f-fleet'),
       reg_number: g('#f-reg'),
       gzi_po_number: g('#f-gzipo'),
