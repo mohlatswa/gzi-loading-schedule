@@ -530,6 +530,23 @@ const DB = {
   async resolveSohDesignRecord(id, { resolvedAt, resolutionNotes }) {
     const { error } = await sb.from('soh_design_records').update({ resolved_at: resolvedAt, resolution_notes: resolutionNotes || null }).eq('id', id);
     if (error) throw error;
+  },
+
+  /* ---- Dashboard settings (key/value: monthly_aop, days_cover_local, days_cover_export) ---- */
+  async getDashboardSettings() {
+    const { data, error } = await sb.from('dashboard_settings').select('*');
+    if (error) throw error;
+    const map = {};
+    (data || []).forEach(r => { map[r.key] = r.value === null || r.value === undefined ? null : Number(r.value); });
+    return map;
+  },
+  async setDashboardSetting(key, value) {
+    const stamp = currentUserStamp();
+    const { error } = await sb.from('dashboard_settings').upsert({
+      key, value: (value === null || value === undefined || value === '') ? null : Number(value),
+      updated_at: new Date().toISOString(), updated_by_email: stamp.email
+    });
+    if (error) throw error;
   }
 };
 
@@ -1370,12 +1387,19 @@ function openLoadModal(ctx, load) {
   $('#f-planned').addEventListener('input', updateCansPreview);
   $('#f-actual').addEventListener('input', updateCansPreview);
 
+  let submitting = false;
   $('#modal-save').addEventListener('click', async () => {
+    if (submitting) return;
     const g = (id) => { const x = $(id).value; return x === '' ? null : x; };
     const customer_id = destType === 'customer' ? g('#f-dest-customer') : null;
     const warehouse_id = destType === 'warehouse' ? g('#f-dest-warehouse') : null;
     if (destType === 'customer' && !customer_id) { toast('Select a customer', 'err'); return; }
     if (destType === 'warehouse' && !warehouse_id) { toast('Select a warehouse', 'err'); return; }
+
+    submitting = true;
+    const saveBtn = $('#modal-save');
+    saveBtn.disabled = true;
+    saveBtn.innerHTML = '<span class="spinner"></span>';
 
     const arrival = g('#f-arrival'), depart = g('#f-depart');
     const status = $('#f-status').value;
@@ -1429,7 +1453,12 @@ function openLoadModal(ctx, load) {
       closeModal();
       toast(isEdit ? 'Load updated' : 'Load added', 'ok');
       renderContent();
-    } catch (err) { toast(err.message, 'err'); }
+    } catch (err) {
+      toast(err.message, 'err');
+      submitting = false;
+      saveBtn.disabled = false;
+      saveBtn.textContent = isEdit ? 'Save changes' : 'Add load';
+    }
   });
 }
 
