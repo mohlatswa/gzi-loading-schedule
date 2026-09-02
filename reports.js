@@ -550,8 +550,9 @@ function openRpmInternalStockModal() {
 /* ================= STOCK (SOH FG / HFI) REPORT ================= */
 let stockReportState = makePeriodState('month');
 let stockReportKind = 'FG';
+function stockKindLabel(k) { return k === 'HFI' ? 'FHI' : 'FG'; }
 async function renderStockReport(content) {
-  setTitle('Stock (SOH FG / HFI)', 'Finished goods and Held For Inspection stock, receipts vs dispatches, per-design counts');
+  setTitle('Stock (SOH)', 'Finished Goods (FG) and Held For Inspection (FHI) stock — receipts vs dispatches and per-design counts');
   const { from, to } = periodRangeFor(stockReportState);
   const [all, designRecords] = await Promise.all([DB.getSohMovements(stockReportKind), DB.getSohDesignRecords(stockReportKind)]);
   const toDate = all.filter(m => !to || m.movement_date <= to);
@@ -563,14 +564,17 @@ async function renderStockReport(content) {
   const openVariances = designRecords.filter(d => !d.resolved_at);
 
   content.innerHTML = `
-    <div class="tab-group" id="stock-kind-tabs" style="margin-bottom:14px;">
-      <button type="button" data-k="FG" class="${stockReportKind === 'FG' ? 'active' : ''}">SOH FG</button>
-      <button type="button" data-k="HFI" class="${stockReportKind === 'HFI' ? 'active' : ''}">HFI</button>
+    <div style="display:flex; align-items:center; gap:12px; margin-bottom:14px;">
+      <strong style="font-size:14px;">Stock (SOH)</strong>
+      <div class="tab-group" id="stock-kind-tabs">
+        <button type="button" data-k="FG" class="${stockReportKind === 'FG' ? 'active' : ''}">(FG)</button>
+        <button type="button" data-k="HFI" class="${stockReportKind === 'HFI' ? 'active' : ''}">(FHI)</button>
+      </div>
     </div>
     ${periodFilterHtml(stockReportState, 'stock')}
-    <div class="section-title"><h2>${esc(stockReportKind)} balance as of ${fmtDate(to)}</h2><div class="actions"><button class="btn btn-orange btn-sm" id="add-receipt-btn">+ Record production receipt</button></div></div>
+    <div class="section-title"><h2>Stock (SOH) (${stockKindLabel(stockReportKind)}) balance as of ${fmtDate(to)}</h2><div class="actions"><button class="btn btn-orange btn-sm" id="add-receipt-btn">+ Record production receipt</button></div></div>
     <div class="grid grid-4" style="margin-bottom:20px;">
-      <div class="stat-card"><div class="stat-label">${esc(stockReportKind)} balance</div><div class="stat-value">${balancePallets}</div><div class="stat-sub">${fmtM1(balanceCans)} cans</div></div>
+      <div class="stat-card"><div class="stat-label">(${stockKindLabel(stockReportKind)}) balance</div><div class="stat-value">${balancePallets}</div><div class="stat-sub">${fmtM1(balanceCans)} cans</div></div>
       <div class="stat-card"><div class="stat-label">Received in period</div><div class="stat-value">${receivedInPeriod}</div></div>
       <div class="stat-card"><div class="stat-label">Dispatched in period</div><div class="stat-value">${dispatchedInPeriod}</div></div>
       <div class="stat-card"><div class="stat-label">Open design variances</div><div class="stat-value" style="color:${openVariances.length ? 'var(--red)' : 'var(--green)'}">${openVariances.length}</div></div>
@@ -627,7 +631,7 @@ async function renderStockReport(content) {
 
 function openReceiptModal(kind) {
   openModal(`
-    <div class="modal-header"><h3>Record ${esc(kind)} production receipt</h3><button class="modal-close" id="modal-close">&times;</button></div>
+    <div class="modal-header"><h3>Record Stock (SOH) (${stockKindLabel(kind)}) production receipt</h3><button class="modal-close" id="modal-close">&times;</button></div>
     <div class="modal-body">
       <form id="receipt-form">
         <div class="form-grid">
@@ -672,7 +676,7 @@ function openReceiptModal(kind) {
 
 function openSohDesignModal(kind) {
   openModal(`
-    <div class="modal-header"><h3>Record ${esc(kind)} stock count</h3><button class="modal-close" id="modal-close">&times;</button></div>
+    <div class="modal-header"><h3>Record Stock (SOH) (${stockKindLabel(kind)}) stock count</h3><button class="modal-close" id="modal-close">&times;</button></div>
     <div class="modal-body">
       <form id="design-form">
         <div class="form-grid">
