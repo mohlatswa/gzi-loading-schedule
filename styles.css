@@ -101,7 +101,8 @@ a:hover { text-decoration: underline; }
 }
 .nav-link:hover { background: var(--orange); color: var(--navy); text-decoration: none; border-left-color: #fff; font-weight: 700; }
 .nav-link:hover .dot { background: var(--navy); }
-.nav-link.active { background: rgba(255,255,255,.08); color: #fff; border-left-color: var(--orange); font-weight: 600; }
+.nav-link.active { background: var(--orange); color: var(--navy); border-left-color: #fff; font-weight: 700; }
+.nav-link.active .dot { background: var(--navy); }
 .nav-customers-list { max-height: 260px; overflow-y: auto; }
 .nav-link .dot { width: 6px; height: 6px; border-radius: 50%; background: #566284; flex: none; }
 .nav-link.active .dot { background: var(--orange); }
