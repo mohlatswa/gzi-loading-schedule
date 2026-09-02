@@ -550,9 +550,9 @@ function openRpmInternalStockModal() {
 /* ================= STOCK (SOH FG / HFI) REPORT ================= */
 let stockReportState = makePeriodState('month');
 let stockReportKind = 'FG';
-function stockKindLabel(k) { return k === 'HFI' ? 'FHI' : 'FG'; }
+function stockKindLabel(k) { return k === 'HFI' ? 'HFI' : 'FG'; }
 async function renderStockReport(content) {
-  setTitle('Stock (SOH)', 'Finished Goods (FG) and Held For Inspection (FHI) stock — receipts vs dispatches and per-design counts');
+  setTitle('Stock (SOH)', 'Finished Goods (FG) and Held For Inspection (HFI) stock — receipts vs dispatches and per-design counts');
   const { from, to } = periodRangeFor(stockReportState);
   const [all, designRecords] = await Promise.all([DB.getSohMovements(stockReportKind), DB.getSohDesignRecords(stockReportKind)]);
   const toDate = all.filter(m => !to || m.movement_date <= to);
@@ -568,7 +568,7 @@ async function renderStockReport(content) {
       <strong style="font-size:14px;">Stock (SOH)</strong>
       <div class="tab-group" id="stock-kind-tabs">
         <button type="button" data-k="FG" class="${stockReportKind === 'FG' ? 'active' : ''}">(FG)</button>
-        <button type="button" data-k="HFI" class="${stockReportKind === 'HFI' ? 'active' : ''}">(FHI)</button>
+        <button type="button" data-k="HFI" class="${stockReportKind === 'HFI' ? 'active' : ''}">(HFI)</button>
       </div>
     </div>
     ${periodFilterHtml(stockReportState, 'stock')}
