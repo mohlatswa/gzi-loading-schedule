@@ -1335,7 +1335,13 @@ function openLoadModal(ctx, load) {
             </select>
           </div>
           <div class="field"><label>Despatching plant</label><input id="f-plant" value="${v('despatching_plant', ctx.customer?.despatching_plant || 'GZI')}" /></div>
-          <div class="field"><label>Transporter</label><input id="f-transporter" value="${v('transporter')}" /></div>
+          <div class="field"><label>Transporter</label>
+            <select id="f-transporter">
+              <option value="">—</option>
+              ${State.transporters.filter(t => t.active).map(t => `<option value="${esc(t.name)}" ${load?.transporter === t.name ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}
+              ${load?.transporter && !State.transporters.some(t => t.name === load.transporter) ? `<option value="${esc(load.transporter)}" selected>${esc(load.transporter)} (not in list)</option>` : ''}
+            </select>
+          </div>
           <div class="field"><label>Fleet / driver</label><input id="f-fleet" value="${v('fleet_details')}" /></div>
           <div class="field"><label>Reg number</label><input id="f-reg" value="${v('reg_number')}" /></div>
           <div class="field"><label>GZI PO number</label><input id="f-gzipo" value="${v('gzi_po_number')}" /></div>
