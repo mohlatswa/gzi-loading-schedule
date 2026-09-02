@@ -27,6 +27,7 @@ const State = {
   warehouses: [],
   supervisors: [],
   transporters: [],
+  contacts: [],
   myRole: null,
   route: parseHash(),
   charts: {}
@@ -39,7 +40,7 @@ function parseHash() {
   const parts = h.split('/').filter(Boolean);
   if (parts[0] === 'customer' && parts[1]) return { name: 'customer', id: parts[1] };
   if (parts[0] === 'warehouse' && parts[1]) return { name: 'warehouse', id: parts[1] };
-  const known = ['dashboard', 'summary', 'customers', 'warehouses', 'supervisors', 'transporters', 'deleted-loads', 'users',
+  const known = ['dashboard', 'summary', 'customers', 'warehouses', 'supervisors', 'transporters', 'contacts', 'deleted-loads', 'users',
     'report-overall', 'report-supervisor', 'report-warehouse', 'report-rpm', 'report-stock', 'report-missing',
     'report-loaded-totals', 'report-deviation'];
   if (known.includes(parts[0])) return { name: parts[0] };
@@ -411,6 +412,17 @@ const DB = {
   async updateTransporter(id, payload) { const { error } = await sb.from('transporters').update(payload).eq('id', id); if (error) throw error; },
   async deleteTransporter(id) { const { error } = await sb.from('transporters').delete().eq('id', id); if (error) throw error; },
 
+  /* ---- contacts (shared address book) ---- */
+  async getContacts() {
+    const { data, error } = await sb.from('contacts').select('*')
+      .order('company', { nullsFirst: false }).order('last_name', { nullsFirst: false }).order('first_name');
+    if (error) throw error;
+    return data;
+  },
+  async createContact(payload) { const { error } = await sb.from('contacts').insert(payload); if (error) throw error; },
+  async updateContact(id, payload) { const { error } = await sb.from('contacts').update(payload).eq('id', id); if (error) throw error; },
+  async deleteContact(id) { const { error } = await sb.from('contacts').delete().eq('id', id); if (error) throw error; },
+
   /* ---- warehouse dispatches (warehouse -> customer) ---- */
   async getWarehouseDispatches({ warehouseId, dateFrom, dateTo } = {}) {
     let q = sb.from('warehouse_dispatches').select('*, warehouses(name), customers(name)').order('dispatch_date', { ascending: true });
@@ -670,13 +682,15 @@ async function bootOnce() {
     fetchWithRetry(() => DB.getWarehouses()),
     fetchWithRetry(() => DB.getSupervisors()),
     fetchWithRetry(() => DB.getTransporters()),
+    fetchWithRetry(() => DB.getContacts()),
     fetchWithRetry(() => DB.getMyProfile())
   ]);
-  const [customers, warehouses, supervisors, transporters, myProfile] = results;
+  const [customers, warehouses, supervisors, transporters, contacts, myProfile] = results;
   if (customers.status === 'fulfilled') State.customers = customers.value; else console.error(customers.reason);
   if (warehouses.status === 'fulfilled') State.warehouses = warehouses.value; else console.error(warehouses.reason);
   if (supervisors.status === 'fulfilled') State.supervisors = supervisors.value; else console.error(supervisors.reason);
   if (transporters.status === 'fulfilled') State.transporters = transporters.value; else console.error(transporters.reason);
+  if (contacts.status === 'fulfilled') State.contacts = contacts.value; else console.error(contacts.reason);
   if (myProfile.status === 'fulfilled') State.myRole = myProfile.value?.role || null; else console.error(myProfile.reason);
   if (!State.myRole && State.session?.user) {
     try {
@@ -717,6 +731,7 @@ function renderShell() {
       <div class="nav-link" data-nav="warehouses"><span class="dot"></span>Warehouses</div>
       <div class="nav-link" data-nav="supervisors"><span class="dot"></span>Supervisors</div>
       <div class="nav-link" data-nav="transporters"><span class="dot"></span>Transporters</div>
+      <div class="nav-link" data-nav="contacts"><span class="dot"></span>Contacts</div>
       <div class="nav-link" data-nav="deleted-loads"><span class="dot"></span>Deleted loads</div>
       <div class="nav-link" data-nav="users"><span class="dot"></span>Users &amp; roles</div>
     </div>
@@ -779,6 +794,7 @@ async function renderContent() {
     else if (State.route.name === 'warehouse') await renderWarehousePage(content, State.route.id);
     else if (State.route.name === 'supervisors') await renderSupervisors(content);
     else if (State.route.name === 'transporters') await renderTransporters(content);
+    else if (State.route.name === 'contacts') await renderContacts(content);
     else if (State.route.name === 'deleted-loads') await renderDeletedLoads(content);
     else if (State.route.name === 'users') await renderUsers(content);
     else if (State.route.name === 'report-overall') await renderOverallReport(content);
