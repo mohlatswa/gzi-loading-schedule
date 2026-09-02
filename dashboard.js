@@ -5,9 +5,8 @@ let dashboardState = makePeriodState('month');
 async function renderDashboard(content) {
   setTitle('Dashboard', 'Everything at a glance for the selected period');
   const { from, to } = periodRangeFor(dashboardState);
-  const [loads, rpmAll, sohAll, settings] = await Promise.all([
+  const [loads, sohAll, settings] = await Promise.all([
     DB.getLoads({ dateFrom: from, dateTo: to }),
-    DB.getRpmMovements(),
     DB.getSohMovements(),
     DB.getDashboardSettings()
   ]);
@@ -16,8 +15,6 @@ async function renderDashboard(content) {
   const totalActualCans = loads.reduce((s, l) => s + (cansFromPallets(l.actual_pallets) || 0), 0);
   const deviationLoads = loads.filter(l => (l.status === 'loaded' || l.status === 'dispatched') && num(l.actual_pallets) !== num(l.planned_pallets));
 
-  const rpmToDate = rpmAll.filter(r => !to || r.movement_date <= to);
-  const rpmOutstanding = rpmToDate.reduce((s, r) => s + (r.direction === 'sent' ? num(r.quantity_pallets) : -num(r.quantity_pallets)), 0);
   const sohToDate = sohAll.filter(m => !to || m.movement_date <= to);
   const sohCansByKind = (kind) => sohToDate.filter(m => m.kind === kind).reduce((s, m) => s + (m.movement_type === 'production_receipt' ? num(m.quantity_cans_m) : -num(m.quantity_cans_m)), 0);
   const sohFgCans = sohCansByKind('FG');
@@ -44,8 +41,7 @@ async function renderDashboard(content) {
       </div>
       <div class="stat-card"><div class="stat-label">Loads with a deviation</div><div class="stat-value" style="color:${deviationLoads.length ? 'var(--red)' : 'var(--green)'}">${deviationLoads.length}</div></div>
     </div>
-    <div class="grid grid-3" style="margin-bottom:20px;">
-      <div class="stat-card"><div class="stat-label">RPM outstanding</div><div class="stat-value">${rpmOutstanding}</div><div class="stat-sub">pallets</div></div>
+    <div class="grid grid-2" style="margin-bottom:20px;">
       <div class="stat-card">
         <div class="stat-label">Days cover — Local RPM</div>
         <div class="stat-value"><input type="number" step="0.1" min="0" class="stat-input" id="dash-dc-local" value="${settings.days_cover_local ?? ''}" placeholder="—" /> days</div>
