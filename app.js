@@ -148,6 +148,7 @@ async function syncSohForLoad(load) {
         movement_date: load.loading_date || todayISO(),
         description: 'Auto: load dispatched',
         load_id: load.id,
+        customer_id: load.customer_id || null,
         created_by: stamp.by,
         created_by_email: stamp.email
       });
@@ -455,7 +456,7 @@ const DB = {
 
   /* ---- Stock on hand ---- */
   async getSohMovements(kind) {
-    let q = sb.from('soh_movements').select('*').order('movement_date', { ascending: true });
+    let q = sb.from('soh_movements').select('*, customers(name)').order('movement_date', { ascending: true });
     if (kind) q = q.eq('kind', kind);
     const { data, error } = await q;
     if (error) throw error;
@@ -543,7 +544,7 @@ const DB = {
 
   /* ---- SOH per-design stock counts ---- */
   async getSohDesignRecords(kind) {
-    let q = sb.from('soh_design_records').select('*').order('production_date', { ascending: false });
+    let q = sb.from('soh_design_records').select('*, customers(name)').order('production_date', { ascending: false });
     if (kind) q = q.eq('kind', kind);
     const { data, error } = await q;
     if (error) throw error;

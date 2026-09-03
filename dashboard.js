@@ -29,6 +29,14 @@ async function renderDashboard(content) {
   loads.forEach(l => { const n = destLabelPlain(l); byCustomerCans[n] = (byCustomerCans[n] || 0) + (cansFromPallets(l.actual_pallets) || 0); });
   const custEntries = Object.entries(byCustomerCans).filter(e => e[1] > 0).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([n, v]) => [n, round2(v)]);
 
+  const sohByCustomer = {};
+  sohToDate.forEach(m => {
+    const name = m.customers?.name || 'Unassigned';
+    const sign = m.movement_type === 'production_receipt' ? 1 : -1;
+    sohByCustomer[name] = (sohByCustomer[name] || 0) + sign * num(m.quantity_cans_m);
+  });
+  const sohCustEntries = Object.entries(sohByCustomer).filter(e => Math.abs(e[1]) > 0.0001).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([n, v]) => [n, round2(v)]);
+
   content.innerHTML = `
     ${periodFilterHtml(dashboardState, 'dash')}
     <div class="grid grid-4" style="margin-bottom:20px;">
@@ -58,9 +66,15 @@ async function renderDashboard(content) {
       <div class="stat-card"><div class="stat-label">HFI</div><div class="stat-value">${fmtM1(sohHfiCans)}</div><div class="stat-sub">as of ${fmtDate(to)}</div></div>
       <div class="stat-card"><div class="stat-label">Total space utilisation</div><div class="stat-value">${spaceUtilPct === null ? '—' : spaceUtilPct.toFixed(1) + '%'}</div><div class="stat-sub">${fmtM1(spaceUsed)} / ${TOTAL_SOH_CAPACITY_M}m capacity</div></div>
     </div>
-    <div class="card chart-card" style="margin-bottom:20px;">
-      <div class="section-title"><h2>Customer breakdown (M)</h2></div>
-      <canvas id="dash-chart-customers"></canvas>
+    <div class="grid grid-2" style="margin-bottom:20px;">
+      <div class="card chart-card">
+        <div class="section-title"><h2>Customer breakdown (M)</h2></div>
+        <canvas id="dash-chart-customers"></canvas>
+      </div>
+      <div class="card chart-card">
+        <div class="section-title"><h2>SOH by customer (M)</h2><div class="stat-sub">balance as of ${fmtDate(to)}</div></div>
+        <canvas id="dash-chart-soh-customers"></canvas>
+      </div>
     </div>
   `;
   bindPeriodFilter(dashboardState, 'dash', renderContent);
@@ -82,6 +96,11 @@ async function renderDashboard(content) {
   State.charts.dashCustomers = new Chart($('#dash-chart-customers'), {
     type: 'bar',
     data: { labels: custEntries.map(e => e[0]), datasets: [{ label: 'Cans (M)', data: custEntries.map(e => e[1]), backgroundColor: '#2563eb', borderRadius: 4 }] },
+    options: { responsive: true, plugins: { legend: { display: false } }, scales: { x: { ticks: { autoSkip: false, maxRotation: 40, minRotation: 20 } } } }
+  });
+  State.charts.dashSohCustomers = new Chart($('#dash-chart-soh-customers'), {
+    type: 'bar',
+    data: { labels: sohCustEntries.map(e => e[0]), datasets: [{ label: 'SOH cans (M)', data: sohCustEntries.map(e => e[1]), backgroundColor: '#16a34a', borderRadius: 4 }] },
     options: { responsive: true, plugins: { legend: { display: false } }, scales: { x: { ticks: { autoSkip: false, maxRotation: 40, minRotation: 20 } } } }
   });
 }

@@ -563,6 +563,17 @@ async function renderStockReport(content) {
   const dispatchedInPeriod = inPeriod.filter(m => m.movement_type === 'dispatch').reduce((s, m) => s + num(m.quantity_pallets), 0);
   const openVariances = designRecords.filter(d => !d.resolved_at);
 
+  const byCustomer = {};
+  toDate.forEach(m => {
+    const key = m.customer_id || '__none__';
+    const sign = m.movement_type === 'production_receipt' ? 1 : -1;
+    const rec = byCustomer[key] || { name: m.customers?.name || 'Unassigned', pallets: 0, cans: 0 };
+    rec.pallets += sign * num(m.quantity_pallets);
+    rec.cans += sign * num(m.quantity_cans_m);
+    byCustomer[key] = rec;
+  });
+  const custBalances = Object.values(byCustomer).sort((a, b) => b.cans - a.cans);
+
   content.innerHTML = `
     <div style="display:flex; align-items:center; gap:12px; margin-bottom:14px;">
       <strong style="font-size:14px;">Stock (SOH)</strong>
@@ -597,15 +608,31 @@ async function renderStockReport(content) {
       </table>
     </div>
 
+    <div class="section-title"><h2>Stock (SOH) (${stockKindLabel(stockReportKind)}) balance by customer</h2></div>
+    <div class="table-wrap" style="margin-bottom:24px;">
+      <table>
+        <thead><tr><th>Customer</th><th class="num">Pallets</th><th class="num">Cans (M)</th></tr></thead>
+        <tbody>
+          ${custBalances.length ? custBalances.map(r => `
+            <tr>
+              <td>${esc(r.name)}</td>
+              <td class="num">${round2(r.pallets)}</td>
+              <td class="num">${fmtM1(r.cans)}</td>
+            </tr>`).join('') : `<tr><td colspan="3" class="empty-state">No stock movements yet — label a production receipt with a customer to see this.</td></tr>`}
+        </tbody>
+      </table>
+    </div>
+
     <div class="section-title"><h2>Design stock counts (SAP vs Counted)</h2><div class="actions"><button class="btn btn-orange btn-sm" id="add-count-btn">+ Record stock count</button></div></div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Design</th><th>Bin</th><th>Market</th><th>Production date</th><th class="num">SAP qty</th><th class="num">Counted qty</th><th class="num">Variance</th><th>Resolved</th><th></th></tr></thead>
+        <thead><tr><th>Design</th><th>Customer</th><th>Bin</th><th>Market</th><th>Production date</th><th class="num">SAP qty</th><th class="num">Counted qty</th><th class="num">Variance</th><th>Resolved</th><th></th></tr></thead>
         <tbody>
           ${designRecords.length ? designRecords.map(d => {
             const variance = num(d.counted_quantity) - num(d.sap_quantity);
             return `<tr>
               <td>${esc(d.design)}</td>
+              <td class="small">${esc(d.customers?.name || '—')}</td>
               <td class="small muted">${esc(d.bin_location || '')}</td>
               <td class="small">${d.market ? esc(d.market === 'local' ? 'Local' : 'Export') : ''}</td>
               <td>${esc(fmtDateShort(d.production_date))}</td>
@@ -615,7 +642,7 @@ async function renderStockReport(content) {
               <td>${d.resolved_at ? `<span class="badge badge-green">Resolved ${esc(fmtDateShort(d.resolved_at))}</span>` : '<span class="badge badge-amber">Open</span>'}</td>
               <td>${!d.resolved_at ? `<button class="btn btn-outline btn-sm" data-resolve="${d.id}">Resolve</button>` : ''}</td>
             </tr>`;
-          }).join('') : `<tr><td colspan="9" class="empty-state">No stock counts recorded yet.</td></tr>`}
+          }).join('') : `<tr><td colspan="10" class="empty-state">No stock counts recorded yet.</td></tr>`}
         </tbody>
       </table>
     </div>
@@ -638,6 +665,12 @@ function openReceiptModal(kind) {
           <div class="field"><label>Date</label><input type="date" id="f-date" value="${todayISO()}" /></div>
           <div class="field"><label>Pallets *</label><input type="number" step="0.01" id="f-pallets" /></div>
           <div class="field"><label>Cans (M)</label><input type="number" step="0.01" id="f-cans" placeholder="auto: pallets × 5446 ÷ 1M" /></div>
+          <div class="field span-2"><label>Customer <span class="muted">(optional — label this stock to a customer)</span></label>
+            <select id="f-customer">
+              <option value="">— None —</option>
+              ${State.customers.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}
+            </select>
+          </div>
           <div class="field span-2"><label>Description</label><input id="f-desc" placeholder="e.g. New production run — Design X" /></div>
         </div>
       </form>
@@ -664,6 +697,7 @@ function openReceiptModal(kind) {
         quantity_pallets: pallets,
         quantity_cans_m: $('#f-cans').value || cansFromPallets(pallets),
         movement_date: $('#f-date').value || todayISO(),
+        customer_id: $('#f-customer').value || null,
         description: $('#f-desc').value.trim() || 'Production receipt',
         created_by: stamp.by, created_by_email: stamp.email
       });
@@ -681,6 +715,12 @@ function openSohDesignModal(kind) {
       <form id="design-form">
         <div class="form-grid">
           <div class="field span-2"><label>Design *</label><input id="f-design" required /></div>
+          <div class="field span-2"><label>Customer <span class="muted">(optional — label this stock to a customer)</span></label>
+            <select id="f-customer">
+              <option value="">— None —</option>
+              ${State.customers.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}
+            </select>
+          </div>
           <div class="field"><label>Bin location</label><input id="f-bin" placeholder="e.g. A-12" /></div>
           <div class="field"><label>Market</label>
             <select id="f-market"><option value="">—</option><option value="local">Local</option><option value="export">Export</option></select>
@@ -706,7 +746,7 @@ function openSohDesignModal(kind) {
     const stamp = currentUserStamp();
     try {
       await DB.createSohDesignRecord({
-        design, kind, bin_location: $('#f-bin').value.trim() || null, market: $('#f-market').value || null, production_date: $('#f-prod-date').value || null,
+        design, kind, customer_id: $('#f-customer').value || null, bin_location: $('#f-bin').value.trim() || null, market: $('#f-market').value || null, production_date: $('#f-prod-date').value || null,
         sap_quantity: sap, counted_quantity: counted,
         created_by: stamp.by, created_by_email: stamp.email
       });
