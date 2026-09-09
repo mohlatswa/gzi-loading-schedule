@@ -32,7 +32,7 @@ async function renderDashboard(content) {
 
   const sohByCustomer = {};
   sohToDate.forEach(m => {
-    const name = m.customers?.name || 'Unassigned';
+    const name = m.customer_label || m.customers?.name || 'Unassigned';
     const sign = m.movement_type === 'production_receipt' ? 1 : -1;
     sohByCustomer[name] = (sohByCustomer[name] || 0) + sign * num(m.quantity_cans_m);
   });
