@@ -42,7 +42,8 @@ function parseHash() {
   if (parts[0] === 'warehouse' && parts[1]) return { name: 'warehouse', id: parts[1] };
   const known = ['dashboard', 'summary', 'customers', 'warehouses', 'supervisors', 'transporters', 'contacts', 'deleted-loads', 'users',
     'report-overall', 'report-supervisor', 'report-warehouse', 'report-rpm', 'report-stock', 'report-missing',
-    'report-loaded-totals', 'report-deviation'];
+    'report-loaded-totals', 'report-deviation',
+    'overtime', 'overtime-summary', 'overtime-approvals', 'overtime-staff'];
   if (known.includes(parts[0])) return { name: parts[0] };
   return { name: 'summary' };
 }
@@ -726,6 +727,10 @@ function renderShell() {
       <div class="nav-link" data-nav="report-rpm"><span class="dot"></span>RPM report</div>
       <div class="nav-link" data-nav="report-stock"><span class="dot"></span>Stock (SOH)</div>
       <div class="nav-link" data-nav="report-missing"><span class="dot"></span>Missing attachments</div>
+      <div class="nav-section">Overtime</div>
+      <div class="nav-link" data-nav="overtime"><span class="dot"></span>Overtime sheet</div>
+      <div class="nav-link" data-nav="overtime-summary"><span class="dot"></span>Overtime summary</div>
+      <div class="nav-link" data-nav="overtime-approvals"><span class="dot"></span>Approvals</div>
       <div class="nav-section">Manage</div>
       <div class="nav-link" data-nav="customers"><span class="dot"></span>Customers</div>
       <div class="nav-customers-list" id="nav-customer-list"></div>
@@ -733,6 +738,7 @@ function renderShell() {
       <div class="nav-link" data-nav="supervisors"><span class="dot"></span>Supervisors</div>
       <div class="nav-link" data-nav="transporters"><span class="dot"></span>Transporters</div>
       <div class="nav-link" data-nav="contacts"><span class="dot"></span>Contacts</div>
+      <div class="nav-link" data-nav="overtime-staff"><span class="dot"></span>Stores team</div>
       <div class="nav-link" data-nav="deleted-loads"><span class="dot"></span>Deleted loads</div>
       <div class="nav-link" data-nav="users"><span class="dot"></span>Users &amp; roles</div>
     </div>
@@ -806,6 +812,10 @@ async function renderContent() {
     else if (State.route.name === 'report-rpm') await renderRpmReport(content);
     else if (State.route.name === 'report-stock') await renderStockReport(content);
     else if (State.route.name === 'report-missing') await renderMissingAttachmentsReport(content);
+    else if (State.route.name === 'overtime') await renderOvertimeSheet(content);
+    else if (State.route.name === 'overtime-summary') await renderOvertimeSummary(content);
+    else if (State.route.name === 'overtime-approvals') await renderOvertimeApprovals(content);
+    else if (State.route.name === 'overtime-staff') await renderOvertimeStaff(content);
   } catch (err) {
     console.error(err);
     content.innerHTML = `<div class="card">Error loading page: ${esc(err.message)}</div>`;

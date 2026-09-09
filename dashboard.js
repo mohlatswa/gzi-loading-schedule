@@ -5,10 +5,11 @@ let dashboardState = makePeriodState('month');
 async function renderDashboard(content) {
   setTitle('Dashboard', 'Everything at a glance for the selected period');
   const { from, to } = periodRangeFor(dashboardState);
-  const [loads, sohAll, settings] = await Promise.all([
+  const [loads, sohAll, settings, otStats] = await Promise.all([
     DB.getLoads({ dateFrom: from, dateTo: to }),
     DB.getSohMovements(),
-    DB.getDashboardSettings()
+    DB.getDashboardSettings(),
+    (typeof otDashboardStats === 'function' ? otDashboardStats() : Promise.resolve(null))
   ]);
 
   const totalPlannedCans = loads.reduce((s, l) => s + (cansFromPallets(l.planned_pallets) || 0), 0);
@@ -66,6 +67,12 @@ async function renderDashboard(content) {
       <div class="stat-card"><div class="stat-label">HFI</div><div class="stat-value">${fmtM1(sohHfiCans)}</div><div class="stat-sub">as of ${fmtDate(to)}</div></div>
       <div class="stat-card"><div class="stat-label">Total space utilisation</div><div class="stat-value">${spaceUtilPct === null ? '—' : spaceUtilPct.toFixed(1) + '%'}</div><div class="stat-sub">${fmtM1(spaceUsed)} / ${TOTAL_SOH_CAPACITY_M}m capacity</div></div>
     </div>
+    ${otStats ? `
+    <div class="grid grid-3" style="margin-bottom:20px;">
+      <div class="stat-card"><div class="stat-label">Overtime — pending approval</div><div class="stat-value" style="color:${otStats.pendingCount ? 'var(--amber)' : 'var(--green)'}">${otStats.pendingCount}</div><div class="stat-sub"><span class="link-btn" id="dash-ot-approvals">go to approvals</span></div></div>
+      <div class="stat-card"><div class="stat-label">Overtime hours — ${esc(otStats.payMonth)}</div><div class="stat-value">${otStats.monthHours.toFixed(1)}</div><div class="stat-sub"><span class="link-btn" id="dash-ot-summary">open summary</span></div></div>
+      <div class="stat-card"><div class="stat-label">Employees over 44h limit</div><div class="stat-value" style="color:${otStats.overLimit ? 'var(--red)' : 'var(--green)'}">${otStats.overLimit}</div><div class="stat-sub">${esc(otStats.payMonth)}</div></div>
+    </div>` : ''}
     <div class="grid grid-2" style="margin-bottom:20px;">
       <div class="card chart-card">
         <div class="section-title"><h2>Customer breakdown (M)</h2></div>
@@ -78,6 +85,8 @@ async function renderDashboard(content) {
     </div>
   `;
   bindPeriodFilter(dashboardState, 'dash', renderContent);
+  const otA = $('#dash-ot-approvals'); if (otA) otA.addEventListener('click', () => { location.hash = '#/overtime-approvals'; });
+  const otS = $('#dash-ot-summary'); if (otS) otS.addEventListener('click', () => { location.hash = '#/overtime-summary'; });
 
   async function saveSetting(key, raw, rerender) {
     const value = raw === '' ? null : Number(raw);
