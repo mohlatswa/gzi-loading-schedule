@@ -569,11 +569,7 @@ function parseSohCustomerValue(val) {
 }
 function sohCustomerName(rec) { return (rec && (rec.customer_label || rec.customers?.name)) || 'Unassigned'; }
 function sohCustomerOptionsHtml(selectedValue, { includeNone = true, noneLabel = '— None —' } = {}) {
-  const labels = (State.sohLabels || []).filter(l => l.active !== false);
-  const known = new Set([
-    ...State.customers.map(c => 'cust:' + c.id),
-    ...labels.map(l => 'label:' + l.name)
-  ]);
+  const known = new Set(State.customers.map(c => 'cust:' + c.id));
   let orphan = '';
   if (selectedValue && !known.has(selectedValue)) {
     const txt = selectedValue.startsWith('label:') ? selectedValue.slice(6)
@@ -583,12 +579,7 @@ function sohCustomerOptionsHtml(selectedValue, { includeNone = true, noneLabel =
   return `
     ${includeNone ? `<option value="" ${!selectedValue ? 'selected' : ''}>${esc(noneLabel)}</option>` : ''}
     ${orphan}
-    <optgroup label="Customers">
-      ${State.customers.map(c => `<option value="cust:${c.id}" ${selectedValue === 'cust:' + c.id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
-    </optgroup>
-    ${labels.length ? `<optgroup label="SOH labels">
-      ${labels.map(l => `<option value="label:${esc(l.name)}" ${selectedValue === 'label:' + l.name ? 'selected' : ''}>${esc(l.name)}</option>`).join('')}
-    </optgroup>` : ''}
+    ${State.customers.map(c => `<option value="cust:${c.id}" ${selectedValue === 'cust:' + c.id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
   `;
 }
 async function renderStockReport(content) {
@@ -712,9 +703,8 @@ function openReceiptModal(kind) {
     <div class="modal-body">
       <form id="receipt-form">
         <div class="form-grid">
-          <div class="field span-2"><label>Customer label * <span class="muted">(which customer is this stock for?)</span></label>
+          <div class="field span-2"><label>Customer * <span class="muted">(which customer is this stock for?)</span></label>
             <select id="f-customer" required>${sohCustomerOptionsHtml('', { noneLabel: '— Select customer —' })}</select>
-            <div class="small muted" style="margin-top:4px;">Need a label that isn't a customer? <span class="link-btn" id="f-manage-labels">Manage SOH labels</span></div>
           </div>
           <div class="field"><label>Date</label><input type="date" id="f-date" value="${todayISO()}" /></div>
           <div class="field"><label>Pallets *</label><input type="number" step="0.01" id="f-pallets" /></div>
@@ -730,7 +720,6 @@ function openReceiptModal(kind) {
   `);
   $('#modal-close').addEventListener('click', closeModal);
   $('#modal-cancel').addEventListener('click', closeModal);
-  $('#f-manage-labels').addEventListener('click', () => { closeModal(); location.hash = '#/soh-labels'; });
   $('#f-pallets').addEventListener('input', () => {
     const pallets = $('#f-pallets').value;
     $('#f-cans').value = pallets ? cansFromPallets(pallets).toFixed(2) : '';
@@ -768,7 +757,7 @@ function openSohDesignModal(kind) {
       <form id="design-form">
         <div class="form-grid">
           <div class="field span-2"><label>Design *</label><input id="f-design" required /></div>
-          <div class="field span-2"><label>Customer label <span class="muted">(label this stock to a customer)</span></label>
+          <div class="field span-2"><label>Customer <span class="muted">(label this stock to a customer)</span></label>
             <select id="f-customer">${sohCustomerOptionsHtml('', { noneLabel: '— None —' })}</select>
           </div>
           <div class="field"><label>Bin location</label><input id="f-bin" placeholder="e.g. A-12" /></div>
@@ -863,84 +852,4 @@ async function renderMissingAttachmentsReport(content) {
     </div>
   `;
   content.querySelectorAll('[data-docs]').forEach(el => el.addEventListener('click', () => openAttachmentsModal(el.dataset.docs)));
-}
-
-/* ================= MANAGE: SOH CUSTOMER LABELS ================= */
-async function renderSohLabels(content) {
-  setTitle('SOH customer labels', 'Extra labels for tagging Stock on Hand to a customer, on top of the main Customers list');
-  const labels = await DB.getSohLabels();
-  State.sohLabels = labels;
-  content.innerHTML = `
-    <div class="card" style="margin-bottom:16px;"><p class="muted small" style="margin:0;">
-      When you record or relabel SOH stock you can pick any customer from the <b>Customers</b> list, or one of these free-standing labels
-      (useful for a customer/consignee that isn't a loading-schedule customer). Balances group by whichever label you set.
-    </p></div>
-    <div class="section-title">
-      <h2>${labels.length} label${labels.length === 1 ? '' : 's'}</h2>
-      <div class="actions"><button class="btn btn-orange" id="add-soh-label-btn">+ Add label</button></div>
-    </div>
-    <div class="table-wrap">
-      <table>
-        <thead><tr><th>Label</th><th>Status</th><th></th></tr></thead>
-        <tbody>
-          ${labels.length ? labels.map(l => `
-            <tr>
-              <td>${esc(l.name)}</td>
-              <td><span class="badge ${l.active !== false ? 'badge-green' : 'badge-gray'}">${l.active !== false ? 'Active' : 'Inactive'}</span></td>
-              <td class="row-actions">
-                <button class="btn btn-outline btn-sm" data-edit="${l.id}">Edit</button>
-                <button class="btn btn-outline btn-sm" data-delete="${l.id}" style="color:var(--red); border-color:#f3caca;">Delete</button>
-              </td>
-            </tr>`).join('') : `<tr><td colspan="3" class="empty-state">No extra labels yet. The main Customers list is still available everywhere.</td></tr>`}
-        </tbody>
-      </table>
-    </div>
-  `;
-  $('#add-soh-label-btn').addEventListener('click', () => openSohLabelModal(null, labels.length));
-  content.querySelectorAll('[data-edit]').forEach(el => el.addEventListener('click', () => openSohLabelModal(labels.find(l => l.id === el.dataset.edit), labels.length)));
-  content.querySelectorAll('[data-delete]').forEach(el => el.addEventListener('click', async () => {
-    const l = labels.find(x => x.id === el.dataset.delete);
-    if (!confirm(`Delete label "${l.name}"? SOH rows already tagged with it keep the text.`)) return;
-    try { await DB.deleteSohLabel(l.id); toast('Label deleted', 'ok'); State.sohLabels = await DB.getSohLabels(); renderContent(); }
-    catch (err) { toast(err.message, 'err'); }
-  }));
-}
-
-function openSohLabelModal(label, count) {
-  const isEdit = !!label;
-  openModal(`
-    <div class="modal-header"><h3>${isEdit ? 'Edit label' : 'Add SOH label'}</h3><button class="modal-close" id="modal-close">&times;</button></div>
-    <div class="modal-body">
-      <form id="soh-label-form">
-        <div class="form-grid">
-          <div class="field span-2"><label>Label name *</label><input required id="f-name" value="${esc(label?.name || '')}" placeholder="e.g. Namibia Breweries" /></div>
-          <div class="field"><label>Status</label>
-            <select id="f-active">
-              <option value="true" ${label?.active !== false ? 'selected' : ''}>Active</option>
-              <option value="false" ${label?.active === false ? 'selected' : ''}>Inactive</option>
-            </select>
-          </div>
-        </div>
-      </form>
-    </div>
-    <div class="modal-footer">
-      <button class="btn btn-outline" id="modal-cancel">Cancel</button>
-      <button class="btn btn-primary" id="modal-save">${isEdit ? 'Save changes' : 'Add label'}</button>
-    </div>
-  `);
-  $('#modal-close').addEventListener('click', closeModal);
-  $('#modal-cancel').addEventListener('click', closeModal);
-  $('#modal-save').addEventListener('click', async () => {
-    const name = $('#f-name').value.trim();
-    if (!name) { toast('Label name is required', 'err'); return; }
-    const payload = { name, active: $('#f-active').value === 'true' };
-    try {
-      if (isEdit) await DB.updateSohLabel(label.id, payload);
-      else await DB.createSohLabel({ ...payload, sort_order: count + 1 });
-      closeModal();
-      toast(isEdit ? 'Label updated' : 'Label added', 'ok');
-      State.sohLabels = await DB.getSohLabels();
-      renderContent();
-    } catch (err) { toast(err.message, 'err'); }
-  });
 }

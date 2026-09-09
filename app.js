@@ -28,7 +28,6 @@ const State = {
   supervisors: [],
   transporters: [],
   contacts: [],
-  sohLabels: [],
   myRole: null,
   route: parseHash(),
   charts: {}
@@ -44,7 +43,7 @@ function parseHash() {
   const known = ['dashboard', 'summary', 'customers', 'warehouses', 'supervisors', 'transporters', 'contacts', 'deleted-loads', 'users',
     'report-overall', 'report-supervisor', 'report-warehouse', 'report-rpm', 'report-stock', 'report-missing',
     'report-loaded-totals', 'report-deviation',
-    'overtime', 'overtime-summary', 'overtime-approvals', 'overtime-staff', 'soh-labels'];
+    'overtime', 'overtime-summary', 'overtime-approvals', 'overtime-staff'];
   if (known.includes(parts[0])) return { name: parts[0] };
   return { name: 'summary' };
 }
@@ -467,16 +466,6 @@ const DB = {
   async createSohMovement(payload) { const { error } = await sb.from('soh_movements').insert(payload); if (error) throw error; },
   async updateSohMovement(id, payload) { const { error } = await sb.from('soh_movements').update(payload).eq('id', id); if (error) throw error; },
 
-  /* ---- SOH customer labels ---- */
-  async getSohLabels() {
-    const { data, error } = await sb.from('soh_labels').select('*').order('sort_order').order('name');
-    if (error) throw error;
-    return data;
-  },
-  async createSohLabel(payload) { const { error } = await sb.from('soh_labels').insert(payload); if (error) throw error; },
-  async updateSohLabel(id, payload) { const { error } = await sb.from('soh_labels').update(payload).eq('id', id); if (error) throw error; },
-  async deleteSohLabel(id) { const { error } = await sb.from('soh_labels').delete().eq('id', id); if (error) throw error; },
-
   /* ---- Audit ---- */
   async getLoadAuditLog(loadId) {
     const { data, error } = await sb.from('load_audit_log').select('*').eq('load_id', loadId).order('changed_at', { ascending: false });
@@ -698,16 +687,14 @@ async function bootOnce() {
     fetchWithRetry(() => DB.getSupervisors()),
     fetchWithRetry(() => DB.getTransporters()),
     fetchWithRetry(() => DB.getContacts()),
-    fetchWithRetry(() => DB.getMyProfile()),
-    fetchWithRetry(() => DB.getSohLabels())
+    fetchWithRetry(() => DB.getMyProfile())
   ]);
-  const [customers, warehouses, supervisors, transporters, contacts, myProfile, sohLabels] = results;
+  const [customers, warehouses, supervisors, transporters, contacts, myProfile] = results;
   if (customers.status === 'fulfilled') State.customers = customers.value; else console.error(customers.reason);
   if (warehouses.status === 'fulfilled') State.warehouses = warehouses.value; else console.error(warehouses.reason);
   if (supervisors.status === 'fulfilled') State.supervisors = supervisors.value; else console.error(supervisors.reason);
   if (transporters.status === 'fulfilled') State.transporters = transporters.value; else console.error(transporters.reason);
   if (contacts.status === 'fulfilled') State.contacts = contacts.value; else console.error(contacts.reason);
-  if (sohLabels.status === 'fulfilled') State.sohLabels = sohLabels.value; else console.error(sohLabels.reason);
   if (myProfile.status === 'fulfilled') State.myRole = myProfile.value?.role || null; else console.error(myProfile.reason);
   if (!State.myRole && State.session?.user) {
     try {
@@ -754,7 +741,6 @@ function renderShell() {
       <div class="nav-link" data-nav="transporters"><span class="dot"></span>Transporters</div>
       <div class="nav-link" data-nav="contacts"><span class="dot"></span>Contacts</div>
       <div class="nav-link" data-nav="overtime-staff"><span class="dot"></span>Stores team</div>
-      <div class="nav-link" data-nav="soh-labels"><span class="dot"></span>SOH customer labels</div>
       <div class="nav-link" data-nav="deleted-loads"><span class="dot"></span>Deleted loads</div>
       <div class="nav-link" data-nav="users"><span class="dot"></span>Users &amp; roles</div>
     </div>
@@ -832,7 +818,6 @@ async function renderContent() {
     else if (State.route.name === 'overtime-summary') await renderOvertimeSummary(content);
     else if (State.route.name === 'overtime-approvals') await renderOvertimeApprovals(content);
     else if (State.route.name === 'overtime-staff') await renderOvertimeStaff(content);
-    else if (State.route.name === 'soh-labels') await renderSohLabels(content);
   } catch (err) {
     console.error(err);
     content.innerHTML = `<div class="card">Error loading page: ${esc(err.message)}</div>`;
