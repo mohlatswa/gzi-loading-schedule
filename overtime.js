@@ -1,5 +1,5 @@
 /* GZI Loading Schedule — overtime.js
-   Warehouse Overtime Sheet + per-employee Summary + Manager Approvals + Stores-team manage page.
+   Warehouse Overtime Sheet + per-employee Summary + Manager Approvals + Warehouse-team manage page.
    Modelled on "Overtime sheet 2026 Warehouse.xlsx" (Technical Stores Overtime Sheet). */
 
 const OT_MAX_HOURS = 44;                       // weekly / pay-month ceiling from the spreadsheet ("Hours Left to 44")
@@ -139,7 +139,7 @@ async function renderOvertimeSheet(content) {
       <div class="stat-card"><div class="stat-label">Entries shown</div><div class="stat-value">${entries.length}</div></div>
       <div class="stat-card"><div class="stat-label">Total hours</div><div class="stat-value">${otFmtH(totalHours)}</div></div>
       <div class="stat-card"><div class="stat-label">Pending approval</div><div class="stat-value" style="color:${pendingCount ? 'var(--amber)' : 'var(--green)'}">${pendingCount}</div></div>
-      <div class="stat-card"><div class="stat-label">Employees</div><div class="stat-value">${staff.length}</div><div class="stat-sub"><span class="link-btn" data-goto="overtime-staff">Manage stores team</span></div></div>
+      <div class="stat-card"><div class="stat-label">Employees</div><div class="stat-value">${staff.length}</div><div class="stat-sub"><span class="link-btn" data-goto="overtime-staff">Manage warehouse team</span></div></div>
     </div>
 
     <div class="table-wrap" id="ot-print-area">
@@ -542,9 +542,9 @@ async function renderOvertimeApprovals(content) {
   }
 }
 
-/* ================= MANAGE: STORES TEAM ================= */
+/* ================= MANAGE: WAREHOUSE TEAM ================= */
 async function renderOvertimeStaff(content) {
-  setTitle('Stores team', 'Employees used on the overtime sheet and summary');
+  setTitle('Warehouse Team', 'Employees used on the overtime sheet and summary');
   const staff = await OT.getStaff();
   content.innerHTML = `
     <div class="section-title">

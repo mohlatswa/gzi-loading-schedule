@@ -740,7 +740,7 @@ function renderShell() {
       <div class="nav-link" data-nav="supervisors"><span class="dot"></span>Supervisors</div>
       <div class="nav-link" data-nav="transporters"><span class="dot"></span>Transporters</div>
       <div class="nav-link" data-nav="contacts"><span class="dot"></span>Contacts</div>
-      <div class="nav-link" data-nav="overtime-staff"><span class="dot"></span>Stores team</div>
+      <div class="nav-link" data-nav="overtime-staff"><span class="dot"></span>Warehouse Team</div>
       <div class="nav-link" data-nav="deleted-loads"><span class="dot"></span>Deleted loads</div>
       <div class="nav-link" data-nav="users"><span class="dot"></span>Users &amp; roles</div>
     </div>
