@@ -672,7 +672,11 @@ async function renderStockReport(content) {
               <td class="num">${nOrDash(d.counted_quantity)}</td>
               <td class="num" style="color:${variance !== 0 ? 'var(--red)' : 'inherit'}">${variance}</td>
               <td>${d.resolved_at ? `<span class="badge badge-green">Resolved ${esc(fmtDateShort(d.resolved_at))}</span>` : '<span class="badge badge-amber">Open</span>'}</td>
-              <td>${!d.resolved_at ? `<button class="btn btn-outline btn-sm" data-resolve="${d.id}">Resolve</button>` : ''}</td>
+              <td class="row-actions">
+                ${!d.resolved_at ? `<button class="btn btn-outline btn-sm" data-resolve="${d.id}">Resolve</button>` : ''}
+                <button class="btn btn-outline btn-sm" data-edit-design="${d.id}">Edit</button>
+                <button class="btn btn-outline btn-sm" data-del-design="${d.id}" style="color:var(--red); border-color:#f3caca;">Delete</button>
+              </td>
             </tr>`;
           }).join('') : `<tr><td colspan="10" class="empty-state">No stock counts recorded yet.</td></tr>`}
         </tbody>
@@ -686,6 +690,15 @@ async function renderStockReport(content) {
   $('#add-receipt-btn').addEventListener('click', () => openReceiptModal(stockReportKind));
   $('#add-count-btn').addEventListener('click', () => openSohDesignModal(stockReportKind));
   content.querySelectorAll('[data-resolve]').forEach(el => el.addEventListener('click', () => openResolveVarianceModal(el.dataset.resolve)));
+  content.querySelectorAll('[data-edit-design]').forEach(el => el.addEventListener('click', () => {
+    openSohDesignModal(stockReportKind, designRecords.find(d => d.id === el.dataset.editDesign));
+  }));
+  content.querySelectorAll('[data-del-design]').forEach(el => el.addEventListener('click', async () => {
+    const d = designRecords.find(x => x.id === el.dataset.delDesign);
+    if (!confirm(`Delete the stock count for "${d.design}"? This cannot be undone.`)) return;
+    try { await DB.deleteSohDesignRecord(d.id); toast('Stock count deleted', 'ok'); renderContent(); }
+    catch (err) { toast(err.message, 'err'); }
+  }));
   content.querySelectorAll('.soh-relabel').forEach(sel => sel.addEventListener('change', async () => {
     const { customer_id, customer_label } = parseSohCustomerValue(sel.value);
     try {
@@ -750,29 +763,31 @@ function openReceiptModal(kind) {
   });
 }
 
-function openSohDesignModal(kind) {
+function openSohDesignModal(kind, record) {
+  const isEdit = !!record;
+  const v = (f, d = '') => esc(record?.[f] ?? d);
   openModal(`
-    <div class="modal-header"><h3>Record Stock (SOH) (${stockKindLabel(kind)}) stock count</h3><button class="modal-close" id="modal-close">&times;</button></div>
+    <div class="modal-header"><h3>${isEdit ? 'Edit' : 'Record'} Stock (SOH) (${stockKindLabel(kind)}) stock count</h3><button class="modal-close" id="modal-close">&times;</button></div>
     <div class="modal-body">
       <form id="design-form">
         <div class="form-grid">
-          <div class="field span-2"><label>Design *</label><input id="f-design" required /></div>
+          <div class="field span-2"><label>Design *</label><input id="f-design" required value="${v('design')}" /></div>
           <div class="field span-2"><label>Customer <span class="muted">(label this stock to a customer)</span></label>
-            <select id="f-customer">${sohCustomerOptionsHtml('', { noneLabel: '— None —' })}</select>
+            <select id="f-customer">${sohCustomerOptionsHtml(isEdit ? sohCustomerValueFor(record) : '', { noneLabel: '— None —' })}</select>
           </div>
-          <div class="field"><label>Bin location</label><input id="f-bin" placeholder="e.g. A-12" /></div>
+          <div class="field"><label>Bin location</label><input id="f-bin" placeholder="e.g. A-12" value="${v('bin_location')}" /></div>
           <div class="field"><label>Market</label>
-            <select id="f-market"><option value="">—</option><option value="local">Local</option><option value="export">Export</option></select>
+            <select id="f-market"><option value="">—</option><option value="local" ${record?.market === 'local' ? 'selected' : ''}>Local</option><option value="export" ${record?.market === 'export' ? 'selected' : ''}>Export</option></select>
           </div>
-          <div class="field"><label>Production date</label><input type="date" id="f-prod-date" /></div>
-          <div class="field"><label>SAP quantity *</label><input type="number" step="0.01" id="f-sap" /></div>
-          <div class="field"><label>Counted quantity *</label><input type="number" step="0.01" id="f-counted" /></div>
+          <div class="field"><label>Production date</label><input type="date" id="f-prod-date" value="${v('production_date')}" /></div>
+          <div class="field"><label>SAP quantity *</label><input type="number" step="0.01" id="f-sap" value="${v('sap_quantity')}" /></div>
+          <div class="field"><label>Counted quantity *</label><input type="number" step="0.01" id="f-counted" value="${v('counted_quantity')}" /></div>
         </div>
       </form>
     </div>
     <div class="modal-footer">
       <button class="btn btn-outline" id="modal-cancel">Cancel</button>
-      <button class="btn btn-primary" id="modal-save">Record count</button>
+      <button class="btn btn-primary" id="modal-save">${isEdit ? 'Save changes' : 'Record count'}</button>
     </div>
   `);
   $('#modal-close').addEventListener('click', closeModal);
@@ -785,13 +800,20 @@ function openSohDesignModal(kind) {
     const stamp = currentUserStamp();
     try {
       const { customer_id, customer_label } = parseSohCustomerValue($('#f-customer').value);
-      await DB.createSohDesignRecord({
-        design, kind, customer_id, customer_label, bin_location: $('#f-bin').value.trim() || null, market: $('#f-market').value || null, production_date: $('#f-prod-date').value || null,
-        sap_quantity: sap, counted_quantity: counted,
-        created_by: stamp.by, created_by_email: stamp.email
-      });
+      const payload = {
+        design, kind, customer_id, customer_label,
+        bin_location: $('#f-bin').value.trim() || null,
+        market: $('#f-market').value || null,
+        production_date: $('#f-prod-date').value || null,
+        sap_quantity: sap, counted_quantity: counted
+      };
+      if (isEdit) {
+        await DB.updateSohDesignRecord(record.id, payload);
+      } else {
+        await DB.createSohDesignRecord({ ...payload, created_by: stamp.by, created_by_email: stamp.email });
+      }
       closeModal();
-      toast('Stock count recorded', 'ok');
+      toast(isEdit ? 'Stock count updated' : 'Stock count recorded', 'ok');
       renderContent();
     } catch (err) { toast(err.message, 'err'); }
   });

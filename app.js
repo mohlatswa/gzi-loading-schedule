@@ -566,6 +566,7 @@ const DB = {
   },
   async createSohDesignRecord(payload) { const { error } = await sb.from('soh_design_records').insert(payload); if (error) throw error; },
   async updateSohDesignRecord(id, payload) { const { error } = await sb.from('soh_design_records').update(payload).eq('id', id); if (error) throw error; },
+  async deleteSohDesignRecord(id) { const { error } = await sb.from('soh_design_records').delete().eq('id', id); if (error) throw error; },
   async resolveSohDesignRecord(id, { resolvedAt, resolutionNotes }) {
     const { error } = await sb.from('soh_design_records').update({ resolved_at: resolvedAt, resolution_notes: resolutionNotes || null }).eq('id', id);
     if (error) throw error;
