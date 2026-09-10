@@ -586,21 +586,21 @@ async function renderStockReport(content) {
   setTitle('Stock (SOH)', 'Finished Goods (FG) and Held For Inspection (HFI) stock — receipts vs dispatches and per-design counts');
   const { from, to } = periodRangeFor(stockReportState);
   const [all, designRecords] = await Promise.all([DB.getSohMovements(stockReportKind), DB.getSohDesignRecords(stockReportKind)]);
-  const toDate = all.filter(m => !to || m.movement_date <= to);
   const inPeriod = all.filter(m => (!from || m.movement_date >= from) && (!to || m.movement_date <= to));
-  const balancePallets = toDate.reduce((s, m) => s + (m.movement_type === 'production_receipt' ? num(m.quantity_pallets) : -num(m.quantity_pallets)), 0);
-  const balanceCans = toDate.reduce((s, m) => s + (m.movement_type === 'production_receipt' ? num(m.quantity_cans_m) : -num(m.quantity_cans_m)), 0);
   const receivedInPeriod = inPeriod.filter(m => m.movement_type === 'production_receipt').reduce((s, m) => s + num(m.quantity_pallets), 0);
   const dispatchedInPeriod = inPeriod.filter(m => m.movement_type === 'dispatch').reduce((s, m) => s + num(m.quantity_pallets), 0);
   const openVariances = designRecords.filter(d => !d.resolved_at);
 
+  // On-hand stock comes from the physical design counts. Cans (M) = counted qty × 5446 ÷ 1e6.
+  const onHandPallets = designRecords.reduce((s, d) => s + num(d.counted_quantity), 0);
+  const onHandCans = designRecords.reduce((s, d) => s + (cansFromPallets(d.counted_quantity) || 0), 0);
+
   const byCustomer = {};
-  toDate.forEach(m => {
-    const name = sohCustomerName(m);
-    const sign = m.movement_type === 'production_receipt' ? 1 : -1;
+  designRecords.forEach(d => {
+    const name = sohCustomerName(d);
     const rec = byCustomer[name] || { name, pallets: 0, cans: 0 };
-    rec.pallets += sign * num(m.quantity_pallets);
-    rec.cans += sign * num(m.quantity_cans_m);
+    rec.pallets += num(d.counted_quantity);
+    rec.cans += (cansFromPallets(d.counted_quantity) || 0);
     byCustomer[name] = rec;
   });
   const custBalances = Object.values(byCustomer).sort((a, b) => b.cans - a.cans);
@@ -614,11 +614,11 @@ async function renderStockReport(content) {
       </div>
     </div>
     ${periodFilterHtml(stockReportState, 'stock')}
-    <div class="section-title"><h2>Stock (SOH) (${stockKindLabel(stockReportKind)}) balance as of ${fmtDate(to)}</h2><div class="actions"><button class="btn btn-orange btn-sm" id="add-receipt-btn">+ Record production receipt</button></div></div>
+    <div class="section-title"><h2>Stock (SOH) (${stockKindLabel(stockReportKind)}) on hand</h2><div class="actions"><button class="btn btn-orange btn-sm" id="add-receipt-btn">+ Record production receipt</button></div></div>
     <div class="grid grid-4" style="margin-bottom:20px;">
-      <div class="stat-card"><div class="stat-label">(${stockKindLabel(stockReportKind)}) balance</div><div class="stat-value">${balancePallets}</div><div class="stat-sub">${fmtM1(balanceCans)} cans</div></div>
-      <div class="stat-card"><div class="stat-label">Received in period</div><div class="stat-value">${receivedInPeriod}</div></div>
-      <div class="stat-card"><div class="stat-label">Dispatched in period</div><div class="stat-value">${dispatchedInPeriod}</div></div>
+      <div class="stat-card"><div class="stat-label">(${stockKindLabel(stockReportKind)}) on hand (counted)</div><div class="stat-value">${round2(onHandPallets)}</div><div class="stat-sub">${fmtM1(onHandCans)} cans · counted qty × 5446</div></div>
+      <div class="stat-card"><div class="stat-label">Received in period</div><div class="stat-value">${receivedInPeriod}</div><div class="stat-sub">${fmtM1(cansFromPallets(receivedInPeriod))} cans</div></div>
+      <div class="stat-card"><div class="stat-label">Dispatched in period</div><div class="stat-value">${dispatchedInPeriod}</div><div class="stat-sub">${fmtM1(cansFromPallets(dispatchedInPeriod))} cans</div></div>
       <div class="stat-card"><div class="stat-label">Open design variances</div><div class="stat-value" style="color:${openVariances.length ? 'var(--red)' : 'var(--green)'}">${openVariances.length}</div></div>
     </div>
     <div class="section-title"><h2>Receive vs dispatch ledger</h2><div class="stat-sub">Set the <b>Customer</b> on any row to label that stock — receipts and dispatches alike.</div></div>
@@ -640,17 +640,17 @@ async function renderStockReport(content) {
       </table>
     </div>
 
-    <div class="section-title"><h2>Stock (SOH) (${stockKindLabel(stockReportKind)}) balance by customer</h2></div>
+    <div class="section-title"><h2>Stock (SOH) (${stockKindLabel(stockReportKind)}) by customer</h2><div class="stat-sub">From the design counts — counted qty × 5446.</div></div>
     <div class="table-wrap" style="margin-bottom:24px;">
       <table>
-        <thead><tr><th>Customer</th><th class="num">Pallets</th><th class="num">Cans (M)</th></tr></thead>
+        <thead><tr><th>Customer</th><th class="num">Counted qty</th><th class="num">Cans (M)</th></tr></thead>
         <tbody>
           ${custBalances.length ? custBalances.map(r => `
             <tr>
               <td>${esc(r.name)}</td>
               <td class="num">${round2(r.pallets)}</td>
               <td class="num">${fmtM1(r.cans)}</td>
-            </tr>`).join('') : `<tr><td colspan="3" class="empty-state">No stock movements yet — label a production receipt with a customer to see this.</td></tr>`}
+            </tr>`).join('') : `<tr><td colspan="3" class="empty-state">No stock counts yet — record a design stock count with a customer to see this.</td></tr>`}
         </tbody>
       </table>
     </div>
@@ -658,7 +658,7 @@ async function renderStockReport(content) {
     <div class="section-title"><h2>Design stock counts (SAP vs Counted)</h2><div class="actions"><button class="btn btn-orange btn-sm" id="add-count-btn">+ Record stock count</button></div></div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Design</th><th>Customer</th><th>Bin</th><th>Market</th><th>Production date</th><th class="num">SAP qty</th><th class="num">Counted qty</th><th class="num">Variance</th><th>Resolved</th><th></th></tr></thead>
+        <thead><tr><th>Design</th><th>Customer</th><th>Bin</th><th>Market</th><th>Production date</th><th class="num">SAP qty</th><th class="num">Counted qty</th><th class="num">Cans (M)</th><th class="num">Variance</th><th>Resolved</th><th></th></tr></thead>
         <tbody>
           ${designRecords.length ? designRecords.map(d => {
             const variance = num(d.counted_quantity) - num(d.sap_quantity);
@@ -670,6 +670,7 @@ async function renderStockReport(content) {
               <td>${esc(fmtDateShort(d.production_date))}</td>
               <td class="num">${nOrDash(d.sap_quantity)}</td>
               <td class="num">${nOrDash(d.counted_quantity)}</td>
+              <td class="num">${fmtM1(cansFromPallets(d.counted_quantity))}</td>
               <td class="num" style="color:${variance !== 0 ? 'var(--red)' : 'inherit'}">${variance}</td>
               <td>${d.resolved_at ? `<span class="badge badge-green">Resolved ${esc(fmtDateShort(d.resolved_at))}</span>` : '<span class="badge badge-amber">Open</span>'}</td>
               <td class="row-actions">
@@ -678,7 +679,7 @@ async function renderStockReport(content) {
                 <button class="btn btn-outline btn-sm" data-del-design="${d.id}" style="color:var(--red); border-color:#f3caca;">Delete</button>
               </td>
             </tr>`;
-          }).join('') : `<tr><td colspan="10" class="empty-state">No stock counts recorded yet.</td></tr>`}
+          }).join('') : `<tr><td colspan="11" class="empty-state">No stock counts recorded yet.</td></tr>`}
         </tbody>
       </table>
     </div>

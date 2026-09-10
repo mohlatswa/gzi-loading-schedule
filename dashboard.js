@@ -5,9 +5,9 @@ let dashboardState = makePeriodState('month');
 async function renderDashboard(content) {
   setTitle('Dashboard', 'Everything at a glance for the selected period');
   const { from, to } = periodRangeFor(dashboardState);
-  const [loads, sohAll, settings] = await Promise.all([
+  const [loads, sohDesign, settings] = await Promise.all([
     DB.getLoads({ dateFrom: from, dateTo: to }),
-    DB.getSohMovements(),
+    DB.getSohDesignRecords(),
     DB.getDashboardSettings()
   ]);
 
@@ -15,10 +15,12 @@ async function renderDashboard(content) {
   const totalActualCans = loads.reduce((s, l) => s + (cansFromPallets(l.actual_pallets) || 0), 0);
   const deviationLoads = loads.filter(l => (l.status === 'loaded' || l.status === 'dispatched') && num(l.actual_pallets) !== num(l.planned_pallets));
 
-  const sohToDate = sohAll.filter(m => !to || m.movement_date <= to);
-  const sohCansByKind = (kind) => sohToDate.filter(m => m.kind === kind).reduce((s, m) => s + (m.movement_type === 'production_receipt' ? num(m.quantity_cans_m) : -num(m.quantity_cans_m)), 0);
-  const sohFgCans = sohCansByKind('FG');
-  const sohHfiComputed = sohCansByKind('HFI');
+  // Stock on hand = latest physical counts. Cans (M) = counted qty × 5446 ÷ 1e6.
+  const sohDesignFg = sohDesign.filter(d => d.kind === 'FG');
+  const sohDesignHfi = sohDesign.filter(d => d.kind === 'HFI');
+  const sohCountedCans = (rows) => rows.reduce((s, d) => s + (cansFromPallets(d.counted_quantity) || 0), 0);
+  const sohFgCans = sohCountedCans(sohDesignFg);
+  const sohHfiComputed = sohCountedCans(sohDesignHfi);
   const hfiManual = (settings.hfi_manual === null || settings.hfi_manual === undefined) ? null : settings.hfi_manual;
   const sohHfiCans = hfiManual !== null ? hfiManual : sohHfiComputed;
   const spaceUsed = sohFgCans + sohHfiCans;
@@ -32,10 +34,9 @@ async function renderDashboard(content) {
   const custEntries = Object.entries(byCustomerCans).filter(e => e[1] > 0).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([n, v]) => [n, round2(v)]);
 
   const sohByCustomer = {};
-  sohToDate.forEach(m => {
-    const name = m.customer_label || m.customers?.name || 'Unassigned';
-    const sign = m.movement_type === 'production_receipt' ? 1 : -1;
-    sohByCustomer[name] = (sohByCustomer[name] || 0) + sign * num(m.quantity_cans_m);
+  sohDesignFg.forEach(d => {
+    const name = d.customer_label || d.customers?.name || 'Unassigned';
+    sohByCustomer[name] = (sohByCustomer[name] || 0) + (cansFromPallets(d.counted_quantity) || 0);
   });
   const sohCustEntries = Object.entries(sohByCustomer).filter(e => Math.abs(e[1]) > 0.0001).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([n, v]) => [n, round2(v)]);
 
@@ -64,11 +65,11 @@ async function renderDashboard(content) {
       </div>
     </div>
     <div class="grid grid-3" style="margin-bottom:20px;">
-      <div class="stat-card"><div class="stat-label">SOH FG</div><div class="stat-value">${fmtM1(sohFgCans)}</div><div class="stat-sub">as of ${fmtDate(to)}</div></div>
+      <div class="stat-card"><div class="stat-label">SOH FG</div><div class="stat-value">${fmtM1(sohFgCans)}</div><div class="stat-sub">${sohDesignFg.length} design count${sohDesignFg.length === 1 ? '' : 's'} · counted qty × 5446</div></div>
       <div class="stat-card">
         <div class="stat-label">HFI</div>
         <div class="stat-value"><input type="number" step="0.1" min="0" class="stat-input" id="dash-hfi" value="${hfiManual ?? ''}" placeholder="${fmtM1(sohHfiComputed)}" />m</div>
-        <div class="stat-sub">${hfiManual !== null ? 'manual · SOH calc ' + fmtM1(sohHfiComputed) : 'as of ' + fmtDate(to) + ' · type to override'}</div>
+        <div class="stat-sub">${hfiManual !== null ? 'manual · counts ' + fmtM1(sohHfiComputed) : 'from design counts · type to override'}</div>
       </div>
       <div class="stat-card"><div class="stat-label">Total space utilisation</div><div class="stat-value">${spaceUtilPct === null ? '—' : spaceUtilPct.toFixed(1) + '%'}</div><div class="stat-sub">(SOH FG ${fmtM1(sohFgCans)} + HFI ${fmtM1(sohHfiCans)}) / ${TOTAL_SOH_CAPACITY_M}m</div></div>
     </div>
@@ -78,7 +79,7 @@ async function renderDashboard(content) {
         <canvas id="dash-chart-customers"></canvas>
       </div>
       <div class="card chart-card">
-        <div class="section-title"><h2>SOH by customer (M)</h2><div class="stat-sub">balance as of ${fmtDate(to)}</div></div>
+        <div class="section-title"><h2>SOH by customer (M)</h2><div class="stat-sub">FG counted qty × 5446, grouped by customer</div></div>
         <canvas id="dash-chart-soh-customers"></canvas>
       </div>
     </div>
