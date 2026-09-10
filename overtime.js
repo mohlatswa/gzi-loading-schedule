@@ -442,28 +442,16 @@ async function renderOvertimeSummary(content) {
 async function renderOvertimeApprovals(content) {
   setTitle('Overtime approvals', 'Manager sign-off for submitted overtime');
   const canDecide = isManager();
-  const [pending, recent] = await Promise.all([
-    OT.getEntries({ status: 'pending' }),
-    (async () => {
-      const { data, error } = await sb.from('overtime_entries')
-        .select('*, overtime_staff(name, employee_no)')
-        .in('status', ['approved', 'rejected'])
-        .order('decided_at', { ascending: false })
-        .limit(25);
-      if (error) throw error;
-      return data;
-    })()
-  ]);
+  const pending = await OT.getEntries({ status: 'pending' });
 
   const pendHours = pending.reduce((s, e) => s + otHours(e.hours), 0);
 
   content.innerHTML = `
     ${!canDecide ? `<div class="card" style="margin-bottom:16px;"><p class="muted small" style="margin:0;">Only a <b>Manager</b> can approve or reject overtime. You can review the queue here; ask a manager to sign off.</p></div>` : ''}
 
-    <div class="grid grid-3" style="margin-bottom:18px;">
+    <div class="grid grid-2" style="margin-bottom:18px;">
       <div class="stat-card"><div class="stat-label">Awaiting approval</div><div class="stat-value" style="color:${pending.length ? 'var(--amber)' : 'var(--green)'}">${pending.length}</div></div>
       <div class="stat-card"><div class="stat-label">Hours awaiting approval</div><div class="stat-value">${otFmtH(pendHours)}</div></div>
-      <div class="stat-card"><div class="stat-label">Decided recently</div><div class="stat-value">${recent.length}</div></div>
     </div>
 
     <div class="section-title"><h2>Pending queue</h2>${canDecide && pending.length ? '<div class="actions"><button class="btn btn-outline btn-sm" id="ot-approve-all">Approve all</button></div>' : ''}</div>
@@ -491,26 +479,6 @@ async function renderOvertimeApprovals(content) {
                 ` : '<span class="badge badge-amber">Pending</span>'}
               </td>
             </tr>`).join('') : `<tr><td colspan="10" class="empty-state">Nothing waiting for approval 🎉</td></tr>`}
-        </tbody>
-      </table>
-    </div>
-
-    <div class="section-title" style="margin-top:26px;"><h2>Recently decided</h2></div>
-    <div class="table-wrap">
-      <table>
-        <thead><tr><th>Decided</th><th>Employee</th><th>Date</th><th class="num">Hours</th><th>Pay month</th><th>Outcome</th><th>By</th><th>Note</th></tr></thead>
-        <tbody>
-          ${recent.length ? recent.map(e => `
-            <tr>
-              <td class="small muted">${esc(fmtDateTime(e.decided_at))}</td>
-              <td>${esc(otStaffName(e))}</td>
-              <td class="small">${esc(fmtDateShort(e.work_date))}</td>
-              <td class="num">${otFmtH(e.hours)}</td>
-              <td class="small">${esc(e.pay_month || '')}</td>
-              <td><span class="badge ${OT_STATUS_BADGE[e.status]}">${OT_STATUS_LABEL[e.status]}</span></td>
-              <td class="small muted">${esc(e.decided_by_email || '')}</td>
-              <td class="small muted">${esc(e.decision_note || '')}</td>
-            </tr>`).join('') : `<tr><td colspan="8" class="empty-state">No decisions yet.</td></tr>`}
         </tbody>
       </table>
     </div>
@@ -628,27 +596,4 @@ function openOvertimeStaffModal(s, count) {
       renderContent();
     } catch (err) { toast(err.message, 'err'); }
   });
-}
-
-/* ---- dashboard helper (called from dashboard.js) ---- */
-async function otDashboardStats() {
-  try {
-    const payMonth = otCurrentPayMonth();
-    const { data, error } = await sb.from('overtime_entries').select('staff_id, hours, status, pay_month');
-    if (error) throw error;
-    const pending = data.filter(e => e.status === 'pending');
-    const thisMonth = data.filter(e => e.pay_month === payMonth && e.status !== 'rejected');
-    const byStaff = {};
-    thisMonth.filter(e => e.status === 'approved').forEach(e => { byStaff[e.staff_id] = (byStaff[e.staff_id] || 0) + otHours(e.hours); });
-    const overLimit = Object.values(byStaff).filter(h => h > OT_MAX_HOURS).length;
-    return {
-      payMonth,
-      pendingCount: pending.length,
-      monthHours: thisMonth.reduce((s, e) => s + otHours(e.hours), 0),
-      overLimit
-    };
-  } catch (err) {
-    console.error('overtime dashboard stats failed', err);
-    return null;
-  }
 }

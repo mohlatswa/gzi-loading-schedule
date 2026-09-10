@@ -5,11 +5,10 @@ let dashboardState = makePeriodState('month');
 async function renderDashboard(content) {
   setTitle('Dashboard', 'Everything at a glance for the selected period');
   const { from, to } = periodRangeFor(dashboardState);
-  const [loads, sohAll, settings, otStats] = await Promise.all([
+  const [loads, sohAll, settings] = await Promise.all([
     DB.getLoads({ dateFrom: from, dateTo: to }),
     DB.getSohMovements(),
-    DB.getDashboardSettings(),
-    (typeof otDashboardStats === 'function' ? otDashboardStats() : Promise.resolve(null))
+    DB.getDashboardSettings()
   ]);
 
   const totalPlannedCans = loads.reduce((s, l) => s + (cansFromPallets(l.planned_pallets) || 0), 0);
@@ -19,7 +18,9 @@ async function renderDashboard(content) {
   const sohToDate = sohAll.filter(m => !to || m.movement_date <= to);
   const sohCansByKind = (kind) => sohToDate.filter(m => m.kind === kind).reduce((s, m) => s + (m.movement_type === 'production_receipt' ? num(m.quantity_cans_m) : -num(m.quantity_cans_m)), 0);
   const sohFgCans = sohCansByKind('FG');
-  const sohHfiCans = sohCansByKind('HFI');
+  const sohHfiComputed = sohCansByKind('HFI');
+  const hfiManual = (settings.hfi_manual === null || settings.hfi_manual === undefined) ? null : settings.hfi_manual;
+  const sohHfiCans = hfiManual !== null ? hfiManual : sohHfiComputed;
   const spaceUsed = sohFgCans + sohHfiCans;
   const spaceUtilPct = TOTAL_SOH_CAPACITY_M > 0 ? (spaceUsed / TOTAL_SOH_CAPACITY_M) * 100 : null;
 
@@ -64,15 +65,13 @@ async function renderDashboard(content) {
     </div>
     <div class="grid grid-3" style="margin-bottom:20px;">
       <div class="stat-card"><div class="stat-label">SOH FG</div><div class="stat-value">${fmtM1(sohFgCans)}</div><div class="stat-sub">as of ${fmtDate(to)}</div></div>
-      <div class="stat-card"><div class="stat-label">HFI</div><div class="stat-value">${fmtM1(sohHfiCans)}</div><div class="stat-sub">as of ${fmtDate(to)}</div></div>
-      <div class="stat-card"><div class="stat-label">Total space utilisation</div><div class="stat-value">${spaceUtilPct === null ? '—' : spaceUtilPct.toFixed(1) + '%'}</div><div class="stat-sub">${fmtM1(spaceUsed)} / ${TOTAL_SOH_CAPACITY_M}m capacity</div></div>
+      <div class="stat-card">
+        <div class="stat-label">HFI</div>
+        <div class="stat-value"><input type="number" step="0.1" min="0" class="stat-input" id="dash-hfi" value="${hfiManual ?? ''}" placeholder="${fmtM1(sohHfiComputed)}" />m</div>
+        <div class="stat-sub">${hfiManual !== null ? 'manual · SOH calc ' + fmtM1(sohHfiComputed) : 'as of ' + fmtDate(to) + ' · type to override'}</div>
+      </div>
+      <div class="stat-card"><div class="stat-label">Total space utilisation</div><div class="stat-value">${spaceUtilPct === null ? '—' : spaceUtilPct.toFixed(1) + '%'}</div><div class="stat-sub">(SOH FG ${fmtM1(sohFgCans)} + HFI ${fmtM1(sohHfiCans)}) / ${TOTAL_SOH_CAPACITY_M}m</div></div>
     </div>
-    ${otStats ? `
-    <div class="grid grid-3" style="margin-bottom:20px;">
-      <div class="stat-card"><div class="stat-label">Overtime — pending approval</div><div class="stat-value" style="color:${otStats.pendingCount ? 'var(--amber)' : 'var(--green)'}">${otStats.pendingCount}</div><div class="stat-sub"><span class="link-btn" id="dash-ot-approvals">go to approvals</span></div></div>
-      <div class="stat-card"><div class="stat-label">Overtime hours — ${esc(otStats.payMonth)}</div><div class="stat-value">${otStats.monthHours.toFixed(1)}</div><div class="stat-sub"><span class="link-btn" id="dash-ot-summary">open summary</span></div></div>
-      <div class="stat-card"><div class="stat-label">Employees over 44h limit</div><div class="stat-value" style="color:${otStats.overLimit ? 'var(--red)' : 'var(--green)'}">${otStats.overLimit}</div><div class="stat-sub">${esc(otStats.payMonth)}</div></div>
-    </div>` : ''}
     <div class="grid grid-2" style="margin-bottom:20px;">
       <div class="card chart-card">
         <div class="section-title"><h2>Customer breakdown (M)</h2></div>
@@ -85,8 +84,6 @@ async function renderDashboard(content) {
     </div>
   `;
   bindPeriodFilter(dashboardState, 'dash', renderContent);
-  const otA = $('#dash-ot-approvals'); if (otA) otA.addEventListener('click', () => { location.hash = '#/overtime-approvals'; });
-  const otS = $('#dash-ot-summary'); if (otS) otS.addEventListener('click', () => { location.hash = '#/overtime-summary'; });
 
   async function saveSetting(key, raw, rerender) {
     const value = raw === '' ? null : Number(raw);
@@ -98,6 +95,7 @@ async function renderDashboard(content) {
     } catch (err) { toast(err.message, 'err'); }
   }
   $('#dash-aop').addEventListener('change', (e) => saveSetting('monthly_aop', e.target.value, true));
+  $('#dash-hfi').addEventListener('change', (e) => saveSetting('hfi_manual', e.target.value, true));
   $('#dash-dc-local').addEventListener('change', (e) => saveSetting('days_cover_local', e.target.value, false));
   $('#dash-dc-export').addEventListener('change', (e) => saveSetting('days_cover_export', e.target.value, false));
 
