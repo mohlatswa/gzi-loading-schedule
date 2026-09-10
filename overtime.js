@@ -160,7 +160,7 @@ async function renderOvertimeSheet(content) {
               <td>${esc(e.cover_for || '')}</td>
               <td>${esc(otStaffName(e))}${e.overtime_staff?.employee_no ? ` <span class="small muted">${esc(e.overtime_staff.employee_no)}</span>` : ''}</td>
               <td class="small">${esc(e.shift || '')}</td>
-              <td class="num">${otFmtH(e.hours)}</td>
+              <td class="num">${otFmtH(e.hours)}${(!Number(e.hours) && e.source_leave_id) ? '<div class="small" style="color:var(--amber)">confirm hours</div>' : ''}</td>
               <td class="small">${esc(e.overtime_rate || '')}</td>
               <td class="small">${esc(e.remarks || '')}</td>
               <td class="small">${esc(e.reason || '')}</td>
@@ -521,19 +521,20 @@ async function renderOvertimeStaff(content) {
     </div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Name</th><th>Employee no</th><th>Shift</th><th>Status</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>Employee no</th><th>Email</th><th>Shift</th><th>Status</th><th></th></tr></thead>
         <tbody>
           ${staff.length ? staff.map(s => `
             <tr>
               <td>${esc(s.name)}</td>
               <td class="small muted">${esc(s.employee_no || '—')}</td>
+              <td class="small ${s.email ? 'muted' : ''}">${s.email ? esc(s.email) : '<span class="badge badge-amber">no email</span>'}</td>
               <td>${s.shift ? `<span class="badge badge-blue">Shift ${esc(s.shift)}</span>` : '<span class="muted small">—</span>'}</td>
               <td><span class="badge ${s.active !== false ? 'badge-green' : 'badge-gray'}">${s.active !== false ? 'Active' : 'Inactive'}</span></td>
               <td class="row-actions">
                 <button class="btn btn-outline btn-sm" data-edit="${s.id}">Edit</button>
                 <button class="btn btn-outline btn-sm" data-delete="${s.id}" style="color:var(--red); border-color:#f3caca;">Delete</button>
               </td>
-            </tr>`).join('') : `<tr><td colspan="5" class="empty-state">No employees yet. Add your first one.</td></tr>`}
+            </tr>`).join('') : `<tr><td colspan="6" class="empty-state">No employees yet. Add your first one.</td></tr>`}
         </tbody>
       </table>
     </div>
@@ -557,6 +558,7 @@ function openOvertimeStaffModal(s, count) {
         <div class="form-grid">
           <div class="field span-2"><label>Name *</label><input required id="f-name" value="${esc(s?.name || '')}" /></div>
           <div class="field"><label>Employee no</label><input id="f-no" value="${esc(s?.employee_no || '')}" placeholder="e.g. 00000307" /></div>
+          <div class="field"><label>Email <span class="muted">(for leave &amp; cover notices)</span></label><input type="email" id="f-email" value="${esc(s?.email || '')}" placeholder="name@gzi.co.za" /></div>
           <div class="field"><label>Shift</label>
             <select id="f-shift">
               <option value="">—</option>
@@ -585,6 +587,7 @@ function openOvertimeStaffModal(s, count) {
     const payload = {
       name,
       employee_no: $('#f-no').value.trim() || null,
+      email: $('#f-email').value.trim() || null,
       shift: $('#f-shift').value || null,
       active: $('#f-active').value === 'true'
     };

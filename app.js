@@ -43,7 +43,8 @@ function parseHash() {
   const known = ['dashboard', 'summary', 'customers', 'warehouses', 'supervisors', 'transporters', 'contacts', 'deleted-loads', 'users',
     'report-overall', 'report-supervisor', 'report-warehouse', 'report-rpm', 'report-stock', 'report-missing',
     'report-loaded-totals', 'report-deviation',
-    'overtime', 'overtime-summary', 'overtime-approvals', 'overtime-staff'];
+    'overtime', 'overtime-summary', 'overtime-approvals', 'overtime-staff',
+    'leave', 'leave-approvals', 'leave-types'];
   if (known.includes(parts[0])) return { name: parts[0] };
   return { name: 'summary' };
 }
@@ -733,6 +734,9 @@ function renderShell() {
       <div class="nav-link" data-nav="overtime"><span class="dot"></span>Overtime sheet</div>
       <div class="nav-link" data-nav="overtime-summary"><span class="dot"></span>Overtime summary</div>
       <div class="nav-link" data-nav="overtime-approvals"><span class="dot"></span>Approvals</div>
+      <div class="nav-section">Leave</div>
+      <div class="nav-link" data-nav="leave"><span class="dot"></span>Leave schedule</div>
+      <div class="nav-link" data-nav="leave-approvals"><span class="dot"></span>Leave approvals</div>
       <div class="nav-section">Manage</div>
       <div class="nav-link" data-nav="customers"><span class="dot"></span>Customers</div>
       <div class="nav-customers-list" id="nav-customer-list"></div>
@@ -741,6 +745,7 @@ function renderShell() {
       <div class="nav-link" data-nav="transporters"><span class="dot"></span>Transporters</div>
       <div class="nav-link" data-nav="contacts"><span class="dot"></span>Contacts</div>
       <div class="nav-link" data-nav="overtime-staff"><span class="dot"></span>Warehouse Team</div>
+      <div class="nav-link" data-nav="leave-types"><span class="dot"></span>Leave types</div>
       <div class="nav-link" data-nav="deleted-loads"><span class="dot"></span>Deleted loads</div>
       <div class="nav-link" data-nav="users"><span class="dot"></span>Users &amp; roles</div>
     </div>
@@ -818,6 +823,9 @@ async function renderContent() {
     else if (State.route.name === 'overtime-summary') await renderOvertimeSummary(content);
     else if (State.route.name === 'overtime-approvals') await renderOvertimeApprovals(content);
     else if (State.route.name === 'overtime-staff') await renderOvertimeStaff(content);
+    else if (State.route.name === 'leave') await renderLeaveSchedule(content);
+    else if (State.route.name === 'leave-approvals') await renderLeaveApprovals(content);
+    else if (State.route.name === 'leave-types') await renderLeaveTypes(content);
   } catch (err) {
     console.error(err);
     content.innerHTML = `<div class="card">Error loading page: ${esc(err.message)}</div>`;
