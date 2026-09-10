@@ -101,14 +101,26 @@ async function renderDashboard(content) {
   $('#dash-dc-export').addEventListener('change', (e) => saveSetting('days_cover_export', e.target.value, false));
 
   Object.values(State.charts).forEach(c => c && c.destroy());
+  const barChartOptions = () => ({
+    responsive: true,
+    layout: { padding: { top: 24 } },              // room for the value label above the tallest bar
+    plugins: {
+      legend: { display: false },
+      datalabels: { anchor: 'end', align: 'end', offset: 2, clip: false }
+    },
+    scales: {
+      x: { ticks: { autoSkip: false, maxRotation: 40, minRotation: 20 } },
+      y: { beginAtZero: true, grace: '8%' }         // headroom so a full-height bar's label isn't clipped
+    }
+  });
   State.charts.dashCustomers = new Chart($('#dash-chart-customers'), {
     type: 'bar',
     data: { labels: custEntries.map(e => e[0]), datasets: [{ label: 'Cans (M)', data: custEntries.map(e => e[1]), backgroundColor: '#2563eb', borderRadius: 4 }] },
-    options: { responsive: true, plugins: { legend: { display: false } }, scales: { x: { ticks: { autoSkip: false, maxRotation: 40, minRotation: 20 } } } }
+    options: barChartOptions()
   });
   State.charts.dashSohCustomers = new Chart($('#dash-chart-soh-customers'), {
     type: 'bar',
     data: { labels: sohCustEntries.map(e => e[0]), datasets: [{ label: 'SOH cans (M)', data: sohCustEntries.map(e => e[1]), backgroundColor: '#16a34a', borderRadius: 4 }] },
-    options: { responsive: true, plugins: { legend: { display: false } }, scales: { x: { ticks: { autoSkip: false, maxRotation: 40, minRotation: 20 } } } }
+    options: barChartOptions()
   });
 }
