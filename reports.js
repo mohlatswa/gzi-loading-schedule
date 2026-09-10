@@ -658,11 +658,12 @@ async function renderStockReport(content) {
     <div class="section-title"><h2>Design stock counts (SAP vs Counted)</h2><div class="actions"><button class="btn btn-orange btn-sm" id="add-count-btn">+ Record stock count</button></div></div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Design</th><th>Customer</th><th>Bin</th><th>Market</th><th>Production date</th><th class="num">SAP qty</th><th class="num">Counted qty</th><th class="num">Cans (M)</th><th class="num">Variance</th><th>Resolved</th><th></th></tr></thead>
+        <thead><tr><th>SAP code</th><th>Design</th><th>Customer</th><th>Bin</th><th>Market</th><th>Production date</th><th class="num">SAP qty</th><th class="num">Counted qty</th><th class="num">Cans (M)</th><th class="num">Variance</th><th>Resolved</th><th></th></tr></thead>
         <tbody>
           ${designRecords.length ? designRecords.map(d => {
             const variance = num(d.counted_quantity) - num(d.sap_quantity);
             return `<tr>
+              <td class="small muted">${esc(d.sap_code || '')}</td>
               <td>${esc(d.design)}</td>
               <td><select class="soh-relabel" data-mtype="design" data-id="${d.id}">${sohCustomerOptionsHtml(sohCustomerValueFor(d), { noneLabel: '— Unassigned —' })}</select></td>
               <td class="small muted">${esc(d.bin_location || '')}</td>
@@ -679,7 +680,7 @@ async function renderStockReport(content) {
                 <button class="btn btn-outline btn-sm" data-del-design="${d.id}" style="color:var(--red); border-color:#f3caca;">Delete</button>
               </td>
             </tr>`;
-          }).join('') : `<tr><td colspan="11" class="empty-state">No stock counts recorded yet.</td></tr>`}
+          }).join('') : `<tr><td colspan="12" class="empty-state">No stock counts recorded yet.</td></tr>`}
         </tbody>
       </table>
     </div>
@@ -772,7 +773,8 @@ function openSohDesignModal(kind, record) {
     <div class="modal-body">
       <form id="design-form">
         <div class="form-grid">
-          <div class="field span-2"><label>Design *</label><input id="f-design" required value="${v('design')}" /></div>
+          <div class="field"><label>SAP code</label><input id="f-sap-code" placeholder="e.g. FS14-5061" value="${v('sap_code')}" /></div>
+          <div class="field"><label>Design *</label><input id="f-design" required value="${v('design')}" /></div>
           <div class="field span-2"><label>Customer <span class="muted">(label this stock to a customer)</span></label>
             <select id="f-customer">${sohCustomerOptionsHtml(isEdit ? sohCustomerValueFor(record) : '', { noneLabel: '— None —' })}</select>
           </div>
@@ -803,6 +805,7 @@ function openSohDesignModal(kind, record) {
       const { customer_id, customer_label } = parseSohCustomerValue($('#f-customer').value);
       const payload = {
         design, kind, customer_id, customer_label,
+        sap_code: $('#f-sap-code').value.trim() || null,
         bin_location: $('#f-bin').value.trim() || null,
         market: $('#f-market').value || null,
         production_date: $('#f-prod-date').value || null,
