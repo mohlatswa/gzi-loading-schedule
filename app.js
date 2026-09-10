@@ -34,6 +34,7 @@ const State = {
 };
 function canAuthoriseDeletions() { return State.myRole === 'manager' || State.myRole === 'supervisor'; }
 function isManager() { return State.myRole === 'manager'; }
+function canManageUsers() { return State.myRole === 'manager' || State.myRole === 'supervisor'; }
 
 function parseHash() {
   const h = location.hash.replace(/^#\/?/, '');
@@ -488,6 +489,16 @@ const DB = {
     return data;
   },
   async updateProfileRole(id, role) { const { error } = await sb.from('profiles').update({ role }).eq('id', id); if (error) throw error; },
+  async adminCreateUser({ email, password, role }) {
+    const { data, error } = await sb.functions.invoke('admin-users', { body: { action: 'create', email, password, role } });
+    if (error) {
+      let msg = error.message;
+      try { const c = await error.context?.json(); if (c?.error) msg = c.error; } catch (_) {}
+      throw new Error(msg);
+    }
+    if (data?.error) throw new Error(data.error);
+    return data;
+  },
 
   /* ---- Load deletion requests ---- */
   async createDeletionRequest(payload) { const { error } = await sb.from('load_deletion_requests').insert(payload); if (error) throw error; },
@@ -1609,12 +1620,16 @@ async function openAttachmentsModal(loadId) {
 
 /* ================= USERS & ROLES ================= */
 async function renderUsers(content) {
-  setTitle('Users & roles', 'Manager or Supervisor role is required to authorise load deletions');
+  setTitle('Users & roles', 'Managers and Supervisors can create accounts and assign roles');
   const profiles = await DB.getProfiles();
-  const canEdit = isManager();
+  const canEdit = canManageUsers();
 
   content.innerHTML = `
-    ${!canEdit ? `<div class="card" style="margin-bottom:16px;"><p class="muted small" style="margin:0;">You can view roles here, but only a Manager can change them.</p></div>` : ''}
+    ${!canEdit ? `<div class="card" style="margin-bottom:16px;"><p class="muted small" style="margin:0;">You can view roles here, but only a Manager or Supervisor can create accounts or change roles.</p></div>` : ''}
+    <div class="section-title">
+      <h2>${profiles.length} user${profiles.length === 1 ? '' : 's'}</h2>
+      ${canEdit ? '<div class="actions"><button class="btn btn-orange" id="add-user-btn">+ Add user</button></div>' : ''}
+    </div>
     <div class="table-wrap">
       <table>
         <thead><tr><th>Email</th><th>Role</th>${canEdit ? '<th></th>' : ''}</tr></thead>
@@ -1636,6 +1651,9 @@ async function renderUsers(content) {
     </div>
   `;
 
+  const addBtn = $('#add-user-btn');
+  if (addBtn) addBtn.addEventListener('click', openAddUserModal);
+
   content.querySelectorAll('[data-save-role]').forEach(btn => btn.addEventListener('click', async () => {
     const id = btn.dataset.saveRole;
     const role = content.querySelector(`[data-role="${id}"]`).value;
@@ -1646,6 +1664,50 @@ async function renderUsers(content) {
       renderContent();
     } catch (err) { toast(err.message, 'err'); }
   }));
+}
+
+function openAddUserModal() {
+  openModal(`
+    <div class="modal-header"><h3>Add user</h3><button class="modal-close" id="modal-close">&times;</button></div>
+    <div class="modal-body">
+      <form id="add-user-form">
+        <div class="form-grid">
+          <div class="field span-2"><label>Work email *</label><input type="email" id="au-email" required autocomplete="off" placeholder="name@gzi.co.za" /></div>
+          <div class="field span-2"><label>Temporary password *</label><input type="text" id="au-password" required minlength="8" autocomplete="off" placeholder="at least 8 characters" /></div>
+          <div class="field span-2"><label>Role *</label>
+            <select id="au-role">
+              ${Object.entries(ROLE_LABELS).map(([k, lbl]) => `<option value="${k}" ${k === 'warehouse_admin' ? 'selected' : ''}>${lbl}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+        <p class="muted small" style="margin:12px 2px 0;">The account is created already confirmed — the person can sign in immediately with this email and password (they can change it later). Give them the password directly.</p>
+      </form>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" id="modal-cancel">Cancel</button>
+      <button class="btn btn-primary" id="modal-save">Create account</button>
+    </div>
+  `);
+  $('#modal-close').addEventListener('click', closeModal);
+  $('#modal-cancel').addEventListener('click', closeModal);
+  $('#modal-save').addEventListener('click', async () => {
+    const email = $('#au-email').value.trim();
+    const password = $('#au-password').value;
+    const role = $('#au-role').value;
+    if (!email) { toast('Enter the work email', 'err'); return; }
+    if (!password || password.length < 8) { toast('Password must be at least 8 characters', 'err'); return; }
+    const btn = $('#modal-save');
+    btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
+    try {
+      await DB.adminCreateUser({ email, password, role });
+      closeModal();
+      toast('Account created', 'ok');
+      renderContent();
+    } catch (err) {
+      toast(err.message, 'err');
+      btn.disabled = false; btn.textContent = 'Create account';
+    }
+  });
 }
 
 /* ---------------- start ---------------- */
