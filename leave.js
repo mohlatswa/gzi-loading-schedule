@@ -201,9 +201,9 @@ function openLeaveModal(staff, types, req) {
           <div class="field"><label>From *</label><input type="date" id="lv-start" required value="${esc(req?.start_date || '')}" /></div>
           <div class="field"><label>To *</label><input type="date" id="lv-end" required value="${esc(req?.end_date || '')}" /></div>
           <div class="field"><label>Working days</label><input id="lv-days" readonly value="${req?.days ?? ''}" placeholder="auto (Mon–Fri)" /></div>
-          <div class="field"><label>Cover person <span class="muted">(optional)</span></label>
-            <select id="lv-cover">
-              <option value="">— None —</option>
+          <div class="field"><label>Cover person *</label>
+            <select id="lv-cover" required>
+              <option value="">— Select cover person —</option>
               ${staffOpts.map(s => `<option value="${s.id}" data-shift="${esc(s.shift || '')}" data-email="${esc(s.email || '')}" ${req?.cover_staff_id === s.id ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}
             </select>
           </div>
@@ -268,6 +268,7 @@ function openLeaveModal(staff, types, req) {
     const start = startEl.value, end = endEl.value;
     if (!staffId) { toast('Select the employee', 'err'); return; }
     if (!typeId) { toast('Select the leave type', 'err'); return; }
+    if (!coverEl.value) { toast('Select the cover person', 'err'); return; }
     if (!start || !end) { toast('Pick the leave dates', 'err'); return; }
     if (end < start) { toast('End date is before the start date', 'err'); return; }
     const workingDays = lvWorkingDays(start, end).length;
